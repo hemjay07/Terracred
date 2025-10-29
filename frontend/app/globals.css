@@ -1,0 +1,70 @@
+@import "tailwindcss";
+
+/* TerraCred Theme - Dark Mode */
+:root {
+  /* Backgrounds */
+  --background: #0F172A;
+  --foreground: #F1F5F9;
+  --card: #1E293B;
+  --card-foreground: #F1F5F9;
+  
+  /* Primary (Hedera Purple) */
+  --primary: #82269E;
+  --primary-foreground: #FFFFFF;
+  
+  /* Accent (Nigeria Green) */
+  --accent: #008751;
+  --accent-foreground: #FFFFFF;
+  
+  /* Borders */
+  --border: #334155;
+  --ring: #82269E;
+  
+  /* Radius */
+  --radius: 0.5rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+  
+  /* Custom Colors */
+  --color-hedera-purple: #82269E;
+  --color-nigeria-green: #008751;
+  --color-success: #10B981;
+  --color-warning: #F59E0B;
+  --color-danger: #EF4444;
+  --color-gold: #FFD700;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--background);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 5px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--primary);
+}

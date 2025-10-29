@@ -1,0 +1,380 @@
+const express = require('express');
+const router = express.Router();
+const dataStore = require('../data/store');
+
+/**
+ * Submit new property for tokenization
+ * POST /api/properties
+ */
+router.post('/', async (req, res) => {
+    try {
+        const {
+            owner,
+            address,
+            value,
+            description,
+            proofDocumentUri,
+            tokenSupply
+        } = req.body;
+
+        // Validate required fields
+        if (!owner || !address || !value) {
+            return res.status(400).json({
+                success: false,
+                error: 'Missing required fields: owner, address, value'
+            });
+        }
+
+        // Create property record
+        const property = dataStore.addProperty({
+            owner,
+            address,
+            value,
+            description: description || '',
+            proofDocumentUri: proofDocumentUri || 'ipfs://pending',
+            appraisalHash: '0x' + Math.random().toString(16).substr(2, 40),
+            deedHash: '0x' + Math.random().toString(16).substr(2, 40),
+            status: 'pending',
+            tokenSupply: tokenSupply || 1000,
+            createdAt: new Date()
+        });
+
+        // Log transaction
+        dataStore.addTransaction({
+            type: 'PROPERTY_SUBMITTED',
+            propertyId: property.propertyId,
+            userAddress: owner,
+            data: {
+                address,
+                value
+            }
+        });
+
+        res.json({
+            success: true,
+            property: {
+                propertyId: property.propertyId,
+                status: property.status,
+                message: 'Property submitted for verification'
+            }
+        });
+
+    } catch (error) {
+        console.error('Property submission error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+/**
+ * Get property verification status
+ * GET /api/properties/:propertyId/status
+ */
+router.get('/:propertyId/status', async (req, res) => {
+    try {
+        const { propertyId } = req.params;
+
+        const property = dataStore.getProperty(propertyId);
+
+        if (!property) {
+            return res.status(404).json({
+                success: false,
+                error: 'Property not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            status: {
+                propertyId: property.propertyId,
+                status: property.status,
+                verifiedAt: property.verifiedAt,
+                tokenId: property.tokenId,
+                tokenAddress: property.tokenAddress,
+                message: property.status === 'verified' 
+                    ? 'Property verified and tokenized'
+                    : property.status === 'rejected'
+                    ? 'Property verification rejected'
+                    : 'Property verification in progress'
+            }
+        });
+
+    } catch (error) {
+        console.error('Status check error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+/**
+ * Get property details
+ * GET /api/properties/:propertyId
+ */
+router.get('/:propertyId', async (req, res) => {
+    try {
+        const { propertyId } = req.params;
+
+        const property = dataStore.getProperty(propertyId);
+
+        if (!property) {
+            return res.status(404).json({
+                success: false,
+                error: 'Property not found'
+            });
+        }
+
+        res.json({
+            success: true,
+            property
+        });
+
+    } catch (error) {
+        console.error('Property fetch error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+/**
+ * Get all properties for an owner
+ * GET /api/properties?owner=0.0.12345
+ */
+router.get('/', async (req, res) => {
+    try {
+        const { owner } = req.query;
+
+        if (owner) {
+            const properties = dataStore.getPropertiesByOwner(owner);
+            return res.json({
+                success: true,
+                properties
+            });
+        }
+
+        // Return all properties if no owner specified
+        const properties = dataStore.getAllProperties();
+        res.json({
+            success: true,
+            properties
+        });
+
+    } catch (error) {
+        console.error('Properties fetch error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+/**
+ * Verify property (Admin only - for demo purposes)
+ * POST /api/properties/:propertyId/verify
+ */
+router.post('/:propertyId/verify', async (req, res) => {router.post('/:propertyId/verify', async (req, res) => {
+    try {
+        const { propertyId } = req.params;
+        const { verifier } = req.body;
+
+        // Get property first
+        const property = dataStore.getProperty(propertyId);
+        
+        if (!property) {
+            return res.status(404).json({
+                success: false,
+                error: 'Property not found'
+            });
+        }
+
+        // Create RWA token on Hedera
+        console.log(`Creating RWA token for ${propertyId}...`);
+        
+        const hederaService = req.app.locals.services.hedera;
+        
+        // Create the RWA token
+        const rwaTokenId = await hederaService.createRWAToken({
+            propertyId: property.propertyId,
+            address: property.address,
+            value: property.value,
+            tokenSupply: property.tokenSupply,
+            ownerAccountId: property.owner
+        });
+        
+        console.log(`RWA Token created: ${rwaTokenId}`);
+        
+        // Convert Hedera Token ID to EVM address
+        // Format: 0.0.12345 -> 0x0000000000000000000000000000000000003039
+        const tokenIdParts = rwaTokenId.split('.');
+        const tokenNum = parseInt(tokenIdParts[2]);
+        const tokenAddress = '0x' + tokenNum.toString(16).padStart(40, '0');
+        
+        console.log(`Token Address (EVM): ${tokenAddress}`);
+
+        // Grant KYC to owner so they can receive tokens
+        console.log(`Granting KYC to ${property.owner}...`);
+        await hederaService.grantKYC(property.owner, rwaTokenId);
+        
+        console.log(`Property ${propertyId} verified and tokenized!`);
+
+        // Update property in store
+        const updatedProperty = dataStore.updatePropertyStatus(propertyId, 'verified', {
+            verifiedAt: new Date(),
+            verifier: verifier || '0.0.98765',
+            tokenId: rwaTokenId,
+            tokenAddress: tokenAddress
+        });
+
+        // Log transaction
+        dataStore.addTransaction({
+            type: 'PROPERTY_VERIFIED',
+            propertyId: updatedProperty.propertyId,
+            userAddress: updatedProperty.owner,
+            data: {
+                tokenId: updatedProperty.tokenId,
+                tokenAddress: updatedProperty.tokenAddress,
+                verifier: updatedProperty.verifier
+            }
+        });
+
+        // Log to HCS if service available
+        try {
+            if (req.app.locals.services?.hcs) {
+                await req.app.locals.services.hcs.logPropertyVerification({
+                    propertyId: updatedProperty.propertyId,
+                    address: updatedProperty.address,
+                    value: updatedProperty.value,
+                    appraisalHash: updatedProperty.appraisalHash,
+                    deedHash: updatedProperty.deedHash,
+                    verifier: updatedProperty.verifier,
+                    tokenId: updatedProperty.tokenId
+                });
+            }
+        } catch (hcsError) {
+            console.log('HCS logging skipped:', hcsError.message);
+        }
+
+        res.json({
+            success: true,
+            property: updatedProperty
+        });
+
+    } catch (error) {
+        console.error('Property verification error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+    try {
+        const { propertyId } = req.params;
+        const { verifier, tokenId, tokenAddress } = req.body;
+
+        const property = dataStore.updatePropertyStatus(propertyId, 'verified', {
+            verifiedAt: new Date(),
+            verifier: verifier || '0.0.98765',
+            tokenId: tokenId || `0.0.${Math.floor(10000 + Math.random() * 90000)}`,
+            tokenAddress: tokenAddress || `0x${Array.from({length: 40}, () => Math.floor(Math.random() * 16).toString(16)).join('')}`
+        });
+
+        if (!property) {
+            return res.status(404).json({
+                success: false,
+                error: 'Property not found'
+            });
+        }
+
+        // Log transaction
+        dataStore.addTransaction({
+            type: 'PROPERTY_VERIFIED',
+            propertyId: property.propertyId,
+            userAddress: property.owner,
+            data: {
+                tokenId: property.tokenId,
+                verifier: property.verifier
+            }
+        });
+
+       // Log to HCS if service available
+try {
+    if (req.app.locals.services?.hcs) {
+        await req.app.locals.services.hcs.logPropertyVerification({
+            propertyId: property.propertyId,
+            address: property.address,
+            value: property.value,
+            appraisalHash: property.appraisalHash,
+            deedHash: property.deedHash,
+            verifier: property.verifier,
+            tokenId: property.tokenId
+        });
+    }
+} catch (hcsError) {
+    console.log('HCS logging skipped:', hcsError.message);
+}
+
+        res.json({
+            success: true,
+            property
+        });
+
+    } catch (error) {
+        console.error('Property verification error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+/**
+ * Reject property (Admin only - for demo purposes)
+ * POST /api/properties/:propertyId/reject
+ */
+router.post('/:propertyId/reject', async (req, res) => {
+    try {
+        const { propertyId } = req.params;
+        const { reason } = req.body;
+
+        const property = dataStore.updatePropertyStatus(propertyId, 'rejected', {
+            rejectedAt: new Date(),
+            rejectionReason: reason || 'Insufficient documentation'
+        });
+
+        if (!property) {
+            return res.status(404).json({
+                success: false,
+                error: 'Property not found'
+            });
+        }
+
+        // Log transaction
+        dataStore.addTransaction({
+            type: 'PROPERTY_REJECTED',
+            propertyId: property.propertyId,
+            userAddress: property.owner,
+            data: {
+                reason: property.rejectionReason
+            }
+        });
+
+        res.json({
+            success: true,
+            property
+        });
+
+    } catch (error) {
+        console.error('Property rejection error:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+module.exports = router;

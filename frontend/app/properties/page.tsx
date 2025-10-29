@@ -1,0 +1,186 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { api } from '@/lib/api';
+import type { Property } from '@/types';
+
+export default function PropertiesPage() {
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<'all' | 'verified' | 'pending'>('all');
+
+  useEffect(() => {
+    async function fetchProperties() {
+      try {
+        const response = await api.getProperties();
+        if (response.success) {
+          setProperties(response.properties);
+        }
+      } catch (error) {
+        console.error('Failed to fetch properties:', error);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchProperties();
+  }, []);
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'verified':
+        return <span className="px-2 py-1 bg-success/10 text-success border border-success/20 rounded text-xs font-medium">✓ Verified</span>;
+      case 'pending':
+        return <span className="px-2 py-1 bg-warning/10 text-warning border border-warning/20 rounded text-xs font-medium">⏳ Pending</span>;
+      case 'rejected':
+        return <span className="px-2 py-1 bg-danger/10 text-danger border border-danger/20 rounded text-xs font-medium">✗ Rejected</span>;
+      default:
+        return null;
+    }
+  };
+
+  const filteredProperties = properties.filter(p => {
+    if (filter === 'all') return true;
+    return p.status === filter;
+  });
+
+  if (loading) {
+    return (
+      <div className="container mx-auto px-4 py-20">
+        <div className="text-center text-muted-foreground">Loading properties...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="container mx-auto px-4 py-20">
+      {/* Header */}
+      <div className="mb-12">
+        <h1 className="text-4xl font-bold mb-4">Properties</h1>
+        <p className="text-muted-foreground">
+          Browse all tokenized properties on TerraCred
+        </p>
+      </div>
+
+      {/* Filter Tabs */}
+      <div className="flex gap-2 mb-8">
+        <button
+          onClick={() => setFilter('all')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            filter === 'all'
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-card border border-border hover:bg-card/80'
+          }`}
+        >
+          All ({properties.length})
+        </button>
+        <button
+          onClick={() => setFilter('verified')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            filter === 'verified'
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-card border border-border hover:bg-card/80'
+          }`}
+        >
+          Verified ({properties.filter(p => p.status === 'verified').length})
+        </button>
+        <button
+          onClick={() => setFilter('pending')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            filter === 'pending'
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-card border border-border hover:bg-card/80'
+          }`}
+        >
+          Pending ({properties.filter(p => p.status === 'pending').length})
+        </button>
+      </div>
+
+      {/* Properties Grid */}
+      {filteredProperties.length === 0 ? (
+        <div className="bg-card border border-border rounded-lg p-12 text-center">
+          <p className="text-muted-foreground mb-4">
+            {filter === 'all' 
+              ? 'No properties found. Be the first to tokenize!' 
+              : `No ${filter} properties found.`}
+          </p>
+          <Link
+            href="/tokenize"
+            className="inline-block px-6 py-3 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90"
+          >
+            Tokenize Property
+          </Link>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {filteredProperties.map((property) => (
+            <Link
+              key={property.propertyId}
+              href={`/properties/${property.propertyId}`}
+              className="bg-card border border-border rounded-lg overflow-hidden hover:border-primary transition-colors group"
+            >
+              {/* Image Placeholder */}
+              <div className="h-48 bg-gradient-to-br from-primary/20 to-accent/20 flex items-center justify-center">
+                <span className="text-6xl">🏠</span>
+              </div>
+
+              {/* Content */}
+              <div className="p-6">
+                {/* Status Badge */}
+                <div className="mb-3">
+                  {getStatusBadge(property.status)}
+                </div>
+
+                {/* Address */}
+                <h3 className="font-semibold text-lg mb-2 group-hover:text-primary transition-colors line-clamp-2">
+                  {property.address}
+                </h3>
+
+                {/* Property ID */}
+                <p className="text-xs text-muted-foreground mb-4 font-mono">
+                  {property.propertyId}
+                </p>
+
+                {/* Stats */}
+                <div className="space-y-2">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Value</span>
+                    <span className="font-semibold">₦{(property.value / 1000000).toFixed(1)}M</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Tokens</span>
+                    <span className="font-semibold">{property.tokenSupply}</span>
+                  </div>
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground">Per Token</span>
+                    <span className="font-semibold">₦{(property.value / property.tokenSupply).toLocaleString()}</span>
+                  </div>
+                </div>
+
+                {/* View Details */}
+                <div className="mt-4 pt-4 border-t border-border">
+                  <span className="text-sm text-primary group-hover:underline">
+                    View Details →
+                  </span>
+                </div>
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
+
+      {/* CTA at Bottom */}
+      {filteredProperties.length > 0 && (
+        <div className="mt-12 text-center">
+          <Link
+            href="/tokenize"
+            className="inline-block px-8 py-4 bg-primary text-primary-foreground rounded-lg font-semibold hover:opacity-90 transition-opacity"
+          >
+            + Tokenize Your Property
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}

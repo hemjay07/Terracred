@@ -73,11 +73,26 @@ export default function BorrowPage() {
     try {
       setProcessingStep('Step 1/2: Requesting token approval - Check your wallet!');
 
+      // Calculate the proportional value of the collateral being deposited
+      // propertyValue should be: (collateralAmount / totalTokenSupply) * totalPropertyValue
+      const collateralValue = Math.floor(
+        parseFloat(collateralAmount) * (selectedProperty.value / selectedProperty.tokenSupply)
+      );
+
+      console.log('🔷 BORROW PAGE: Depositing collateral with parameters:');
+      console.log('  Token Address:', selectedProperty.tokenAddress);
+      console.log('  Collateral Amount (tokens):', collateralAmount);
+      console.log('  Property ID:', selectedProperty.propertyId);
+      console.log('  Collateral Value (Naira):', collateralValue);
+      console.log('  Property Total Value:', selectedProperty.value);
+      console.log('  Property Token Supply:', selectedProperty.tokenSupply);
+      console.log('  Value per token:', selectedProperty.value / selectedProperty.tokenSupply);
+
       const result = await depositCollateral(
         selectedProperty.tokenAddress!,
         collateralAmount,
         selectedProperty.propertyId,
-        selectedProperty.value.toString()
+        collateralValue.toString()
       );
 
       setProcessingStep('Fetching your loan details...');

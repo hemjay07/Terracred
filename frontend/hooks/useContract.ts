@@ -311,32 +311,100 @@ export function useContract() {
     }
   };
 
-  // Get loan details - Query contract view function via HashConnect SDK
+  // Get loan details - Query contract view function via Hedera JSON-RPC
   const getLoanDetails = async (userAddress: string) => {
     try {
       console.log('🔍 Fetching loan details for:', userAddress);
 
-      // For now, use a simplified approach
-      // We'll return placeholder data and show a message to the user
-      // The real implementation would require querying via HashConnect's SDK
-      // which needs wallet connection for contract queries
+      // CRITICAL FIX: Get the user's actual EVM alias address from Hedera mirror node
+      // The simple numeric conversion doesn't match what msg.sender sees in the contract!
+      let userEvmAddress: string;
 
-      console.log('⚠️ getLoanDetails: Mirror node query not supported');
-      console.log('💡 Returning placeholder data. Loan details will be added in future update.');
+      if (userAddress.startsWith('0.0.')) {
+        console.log('🔍 Fetching EVM alias from mirror node...');
+        try {
+          const mirrorResponse = await fetch(`https://testnet.mirrornode.hedera.com/api/v1/accounts/${userAddress}`);
+          const mirrorData = await mirrorResponse.json();
 
-      // Return zeros - the UI will handle this gracefully
+          if (mirrorData.evm_address) {
+            userEvmAddress = mirrorData.evm_address;
+            console.log('✅ Found EVM alias from mirror node:', userEvmAddress);
+          } else {
+            // Fallback to numeric conversion if no alias exists
+            userEvmAddress = hederaIdToEvmAddress(userAddress);
+            console.log('⚠️ No EVM alias found, using numeric conversion:', userEvmAddress);
+          }
+        } catch (mirrorError) {
+          console.error('❌ Failed to fetch from mirror node:', mirrorError);
+          userEvmAddress = hederaIdToEvmAddress(userAddress);
+          console.log('⚠️ Fallback to numeric conversion:', userEvmAddress);
+        }
+      } else {
+        userEvmAddress = userAddress;
+      }
+
+      console.log('User EVM Address for query:', userEvmAddress);
+
+      // Encode the function call: getLoanDetails(address)
+      const functionSelector = '0xe8a7da8e'; // keccak256("getLoanDetails(address)") first 4 bytes
+      const paddedAddress = userEvmAddress.slice(2).padStart(64, '0');
+      const data = functionSelector + paddedAddress;
+
+      console.log('Calling contract at:', CONFIG.LENDING_POOL_ADDRESS);
+
+      // Use Hedera JSON-RPC to call the contract
+      const rpcUrl = 'https://testnet.hashio.io/api';
+      const response = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'eth_call',
+          params: [{ to: CONFIG.LENDING_POOL_ADDRESS, data: data }, 'latest'],
+          id: 1,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        console.error('RPC Error:', result.error);
+        throw new Error(result.error.message || 'Failed to query contract');
+      }
+
+      if (!result.result || result.result === '0x') {
+        console.log('No active loan found');
+        return {
+          collateralAmount: '0',
+          collateralToken: '0x0000000000000000000000000000000000000000',
+          borrowedAmount: '0',
+          totalDebt: '0',
+          healthFactor: '0',
+          maxBorrow: '0',
+        };
+      }
+
+      // Decode the result: (uint256, address, uint256, uint256, uint256, uint256)
+      const resultData = result.result.slice(2);
+      const collateralAmount = BigInt('0x' + resultData.slice(0, 64)).toString();
+      const collateralToken = '0x' + resultData.slice(64 + 24, 128);
+      const borrowedAmount = BigInt('0x' + resultData.slice(128, 192)).toString();
+      const totalDebt = BigInt('0x' + resultData.slice(192, 256)).toString();
+      const healthFactor = BigInt('0x' + resultData.slice(256, 320)).toString();
+      const maxBorrow = BigInt('0x' + resultData.slice(320, 384)).toString();
+
+      console.log('✅ Loan details:', { collateralAmount, borrowedAmount, totalDebt, healthFactor, maxBorrow });
+
       return {
-        collateralAmount: '0',
-        collateralToken: '0x0000000000000000000000000000000000000000',
-        borrowedAmount: '0',
-        totalDebt: '0',
-        healthFactor: '0',
-        maxBorrow: '0',
+        collateralAmount,
+        collateralToken,
+        borrowedAmount,
+        totalDebt,
+        healthFactor,
+        maxBorrow,
       };
     } catch (error: any) {
       console.error('❌ Get loan details error:', error);
-
-      // Return zeros instead of throwing to prevent UI errors
       return {
         collateralAmount: '0',
         collateralToken: '0x0000000000000000000000000000000000000000',

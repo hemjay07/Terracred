@@ -1,19 +1,15 @@
 'use client';
 
 import Link from 'next/link';
-import { useState, useContext } from 'react';
-import { WalletConnectContext } from '@/contexts/WalletConnectContext';
 import dynamic from 'next/dynamic';
 
 
 const HashConnectButton = dynamic(
   () => import('@/components/hashConnectButton'),
   { ssr: false }
-);// import { openHashPackModal, hashPackWallet } from '@/services/wallets/hashPackWallet';
+);
 
 export default function Header() {
-  const { accountId, isConnected } = useContext(WalletConnectContext);
-  const [isConnecting, setIsConnecting] = useState(false);
 
   // const handleConnect = async () => {
   //   setIsConnecting(true);
@@ -54,6 +50,9 @@ export default function Header() {
             </Link>
             <Link href="/borrow" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
               Borrow
+            </Link>
+            <Link href="/admin" className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors">
+              Admin
             </Link>
           </nav>
 

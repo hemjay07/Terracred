@@ -1,16 +1,16 @@
 'use client';
 
-import { useState, useEffect, useContext } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
-import { WalletConnectContext } from '@/contexts/WalletConnectContext';
+import useHashConnect from '@/hooks/useHashConnect';
 import { useContract } from '@/hooks/useContract';
 import { api } from '@/lib/api';
 import { CONFIG } from '@/constants';
 import type { Property } from '@/types';
 
 export default function BorrowPage() {
-  const { isConnected, accountId } = useContext(WalletConnectContext);
-  const { depositCollateral, borrow } = useContract();
+  const { isConnected, accountId } = useHashConnect();
+  const { depositCollateral, borrow, getLoanDetails } = useContract();
 
   const [properties, setProperties] = useState<Property[]>([]);
   const [selectedProperty, setSelectedProperty] = useState<Property | null>(null);
@@ -18,7 +18,10 @@ export default function BorrowPage() {
   const [borrowAmount, setBorrowAmount] = useState('');
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
+  const [processingStep, setProcessingStep] = useState<string>('');
   const [step, setStep] = useState<'select' | 'deposit' | 'borrow'>('select');
+  const [maxBorrowFromContract, setMaxBorrowFromContract] = useState<string>('0');
+  const [loanDetails, setLoanDetails] = useState<any>(null);
 
   useEffect(() => {
     async function fetchProperties() {
@@ -55,8 +58,21 @@ export default function BorrowPage() {
   const handleDepositCollateral = async () => {
     if (!selectedProperty || !collateralAmount || !accountId) return;
 
+    // Warn user about the two-step process
+    const confirmed = confirm(
+      '⚠️ IMPORTANT: Two wallet signatures required\n\n' +
+      'Step 1: Approve token spending (SIGN THIS QUICKLY!)\n' +
+      'Step 2: Deposit collateral\n\n' +
+      'Please keep your wallet open and sign both transactions.\n\n' +
+      'Click OK to continue.'
+    );
+
+    if (!confirmed) return;
+
     setProcessing(true);
     try {
+      setProcessingStep('Step 1/2: Requesting token approval - Check your wallet!');
+
       const result = await depositCollateral(
         selectedProperty.tokenAddress!,
         collateralAmount,
@@ -64,26 +80,50 @@ export default function BorrowPage() {
         selectedProperty.value.toString()
       );
 
-      alert(`✅ Collateral deposited!\nTx: ${result.txHash}`);
-      
+      setProcessingStep('Fetching your loan details...');
+
+      // Fetch loan details to get the actual maxBorrow
+      const details = await getLoanDetails(accountId);
+      setLoanDetails(details);
+      setMaxBorrowFromContract(details.maxBorrow);
+
+      setProcessingStep('');
+      alert(`✅ Collateral deposited!\nTx: ${result.txHash}\n\nMax you can borrow: ₦${(parseFloat(details.maxBorrow) / 100).toLocaleString()}`);
+
       setStep('borrow');
     } catch (error: any) {
+      setProcessingStep('');
       alert(`❌ Failed: ${error.message}`);
     } finally {
       setProcessing(false);
+      setProcessingStep('');
     }
   };
 
   const handleBorrow = async () => {
     if (!borrowAmount) return;
 
+    // Validate borrow amount
+    const requestedAmountCents = parseFloat(borrowAmount) * 100;
+    const maxBorrowCents = parseFloat(maxBorrowFromContract);
+
+    if (requestedAmountCents > maxBorrowCents) {
+      alert(`❌ Cannot borrow ₦${borrowAmount}\n\nMaximum you can borrow: ₦${(maxBorrowCents / 100).toLocaleString()}\n\nThis is based on your collateral value and the ${CONFIG.MAX_LTV}% LTV ratio.`);
+      return;
+    }
+
+    if (requestedAmountCents <= 0) {
+      alert('❌ Please enter a valid borrow amount greater than 0');
+      return;
+    }
+
     setProcessing(true);
     try {
       // heNGN has 2 decimals
-      const amountCents = (parseFloat(borrowAmount) * 100).toString();
+      const amountCents = Math.floor(requestedAmountCents).toString();
       const result = await borrow(amountCents);
 
-      alert(`✅ Borrowed ${borrowAmount} heNGN!\nTx: ${result.txHash}`);
+      alert(`✅ Borrowed ₦${borrowAmount} heNGN!\n\nTransaction: ${result.txHash}\n\n💡 Check your HashPack wallet for the heNGN tokens.\nIf you don't see them, you may need to associate the heNGN token first.`);
       window.location.href = '/dashboard';
     } catch (error: any) {
       alert(`❌ Failed: ${error.message}`);
@@ -203,12 +243,35 @@ export default function BorrowPage() {
                 className="w-full px-4 py-3 bg-background border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
               />
               <p className="text-xs text-muted-foreground mt-1">
-                Max: {selectedProperty.tokenSupply} tokens • 
+                Max: {selectedProperty.tokenSupply} tokens •
                 {collateralAmount && parseFloat(collateralAmount) > 0 && (
                   <span className="text-success font-semibold"> Max borrow: ₦{calculateMaxBorrow().toLocaleString()}</span>
                 )}
               </p>
             </div>
+
+            <div className="mb-6 p-4 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+              <p className="text-sm text-amber-600 dark:text-amber-400 mb-2">
+                <strong>📝 Note:</strong> This process requires 2 wallet signatures:
+              </p>
+              <ol className="text-xs text-muted-foreground space-y-1 ml-4">
+                <li>1️⃣ <strong>Approve</strong> the lending pool to spend your tokens</li>
+                <li>2️⃣ <strong>Deposit</strong> the collateral to the lending pool</li>
+              </ol>
+              <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                ⚠️ Sign both transactions quickly to avoid timeout!
+              </p>
+            </div>
+
+            {processingStep && (
+              <div className="mb-4 p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+                <p className="text-sm text-blue-400 text-center">
+                  {processingStep}
+                  <br />
+                  <span className="text-xs">Check your wallet for signature requests</span>
+                </p>
+              </div>
+            )}
 
             <button
               onClick={handleDepositCollateral}
@@ -227,19 +290,33 @@ export default function BorrowPage() {
 
             <div className="bg-success/10 border border-success/20 rounded-lg p-4 mb-6">
               <p className="text-sm text-success">✅ Collateral deposited: {collateralAmount} tokens</p>
+              {maxBorrowFromContract && parseFloat(maxBorrowFromContract) > 0 && (
+                <p className="text-sm text-success mt-1">
+                  💰 Max you can borrow: <strong>₦{(parseFloat(maxBorrowFromContract) / 100).toLocaleString()}</strong>
+                </p>
+              )}
             </div>
 
             <div className="mb-6">
               <label className="block text-sm font-medium mb-2">Borrow Amount (heNGN)</label>
-              <input
-                type="number"
-                value={borrowAmount}
-                onChange={(e) => setBorrowAmount(e.target.value)}
-                placeholder="e.g., 20000000"
-                className="w-full px-4 py-3 bg-background border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-              />
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  value={borrowAmount}
+                  onChange={(e) => setBorrowAmount(e.target.value)}
+                  placeholder="e.g., 1000000"
+                  className="flex-1 px-4 py-3 bg-background border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+                <button
+                  onClick={() => setBorrowAmount((parseFloat(maxBorrowFromContract) / 100).toString())}
+                  disabled={!maxBorrowFromContract || parseFloat(maxBorrowFromContract) <= 0}
+                  className="px-4 py-3 bg-primary/20 text-primary border border-primary/30 rounded-lg font-medium hover:bg-primary/30 disabled:opacity-50"
+                >
+                  Max
+                </button>
+              </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Max: ₦{calculateMaxBorrow().toLocaleString()} • Rate: {CONFIG.INTEREST_RATE}% APR
+                Enter amount in Naira (₦). Max: ₦{(parseFloat(maxBorrowFromContract) / 100).toLocaleString()} • Rate: {CONFIG.INTEREST_RATE}% APR
               </p>
             </div>
 

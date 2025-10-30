@@ -7,6 +7,8 @@ export function AssociateTokenButton() {
   const [associating, setAssociating] = useState(false);
   const [associated, setAssociated] = useState(false);
 
+  
+
   const handleAssociate = () => {
     setAssociating(true);
     

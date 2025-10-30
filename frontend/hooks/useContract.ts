@@ -1,258 +1,412 @@
 'use client';
 
-import { ethers } from 'ethers';
 import { CONFIG } from '@/constants';
+import useHashConnect from './useHashConnect';
+import {
+  executeContractFunction as hashConnectExecuteContract,
+  approveToken
+} from '@/services/hashConnect';
 
-// HTS Precompile for Hedera native tokens
-const HTS_ADDRESS = '0x0000000000000000000000000000000000000167';
-const HTS_ABI = [
-  "function approve(address token, address spender, uint256 amount) external returns (int64)",
-  "function allowance(address token, address owner, address spender) external returns (int64, uint256)",
-  "function balanceOf(address token, address account) external returns (int64, uint256)",
-];
+// Helper function: Convert Hedera ID to EVM address (Solidity format)
+function hederaIdToEvmAddress(hederaId: string): string {
+  // Parse Hedera ID format: 0.0.12345
+  const parts = hederaId.split('.');
+  if (parts.length !== 3) {
+    throw new Error(`Invalid Hedera ID format: ${hederaId}`);
+  }
 
-const LENDING_POOL_ABI = [
-  "function depositCollateral(address token, uint256 amount, string propertyId, uint256 propertyValue) external",
-  "function borrow(uint256 amount) external",
-  "function repay(uint256 amount) external",
-  "function withdrawCollateral(uint256 amount) external",
-  "function getLoanDetails(address user) view returns (uint256 collateralAmount, address collateralToken, uint256 borrowedAmount, uint256 totalDebt, uint256 healthFactor, uint256 maxBorrow)",
-  "function getHealthFactor(address user) view returns (uint256)",
-  "function isLiquidatable(address user) view returns (bool)",
-];
-
-const ERC20_ABI = [
-  "function balanceOf(address account) view returns (uint256)",
-  "function transfer(address to, uint256 amount) external returns (bool)",
-];
-
-// Helper function: Convert Hedera ID to EVM address
-function hederaIdToSolidityAddress(tokenId: string): string {
-  const parts = tokenId.split('.');
   const num = parseInt(parts[2]);
-  return '0x' + num.toString(16).padStart(40, '0');
+  // Convert to hex and pad to 40 characters (20 bytes)
+  const hex = num.toString(16).padStart(40, '0');
+  return '0x' + hex;
+}
+
+// Helper function: Convert EVM address to Hedera ID
+// Only works for Hedera long-form addresses (0x00000...xxxxx)
+// Cannot convert full 20-byte EVM addresses
+function evmAddressToHederaId(address: string): string {
+  // Remove 0x prefix if present
+  const cleanAddress = address.startsWith('0x') ? address.slice(2) : address;
+
+  // Check if this is a long-form Hedera address (most significant bytes are zero)
+  // Long-form: 0x0000000000000000000000000000000000003039 = 0.0.12345
+  // Full EVM:  0x4aa74485F96993438Cf73Bc56d603317ab22Db32 = cannot convert
+
+  // A long-form Hedera address will have at least 32 leading zeros (16 bytes of zeros)
+  const leadingZeros = cleanAddress.match(/^0+/)?.[0].length || 0;
+
+  if (leadingZeros < 32) {
+    // This is a full EVM address, not a Hedera long-form address
+    // We cannot convert this - the user needs to provide the Hedera ID manually
+    throw new Error(
+      `Cannot convert full EVM address to Hedera ID: ${address}\n` +
+      `This appears to be a native EVM contract address.\n` +
+      `Please provide the contract's Hedera ID (0.0.xxxxx format) in your config.`
+    );
+  }
+
+  // Extract the rightmost hex digits (after the zeros)
+  const significantPart = cleanAddress.replace(/^0+/, '');
+
+  // Use BigInt to handle large numbers without scientific notation
+  try {
+    const num = BigInt('0x' + significantPart);
+    return `0.0.${num.toString()}`;
+  } catch (error) {
+    throw new Error(`Failed to convert address to Hedera ID: ${address}`);
+  }
 }
 
 export function useContract() {
-  const getProvider = () => {
-    // Use window.ethereum provided by HashPack
-    if (typeof window === 'undefined' || !window.ethereum) {
-      throw new Error('No wallet connected. Please connect HashPack.');
-    }
-
-    console.log('Using window.ethereum provider from HashPack');
-    return new ethers.BrowserProvider(window.ethereum);
-  };
-
-  const getSigner = async () => {
-    const provider = getProvider();
-    const signer = await provider.getSigner();
-    return signer;
-  };
+  const { accountId, isConnected } = useHashConnect();
 
 
-  const getLendingPoolContract = async () => {
-    const signer = await getSigner();
-    return new ethers.Contract(
-      CONFIG.LENDING_POOL_ADDRESS,
-      LENDING_POOL_ABI,
-      signer
-    );
-  };
-
-  const getHTSContract = async () => {
-    const signer = await getSigner();
-    return new ethers.Contract(HTS_ADDRESS, HTS_ABI, signer);
-  };
-
-  const getTokenContract = async (tokenAddress: string) => {
-    const provider = getProvider();
-    return new ethers.Contract(tokenAddress, ERC20_ABI, provider);
-  };
-
-  // Get token balance using HTS precompile for Hedera tokens
+  // Get token balance - Note: This is a read-only operation, doesn't need signing
   const getTokenBalance = async (tokenAddress: string, userAddress: string) => {
     try {
-      console.log('Checking balance for:', tokenAddress, 'user:', userAddress);
-      
-      const isHederaToken = tokenAddress.startsWith('0x000000000000000000000000');
-      
-      if (isHederaToken) {
-        console.log('Using HTS precompile for Hedera token');
-        const htsContract = await getHTSContract();
-        const result = await htsContract.balanceOf(tokenAddress, userAddress);
-        const balance = result[1].toString();
-        console.log('HTS Balance:', balance);
-        return balance;
-      } else {
-        console.log('Using standard ERC20 balanceOf');
-        const tokenContract = await getTokenContract(tokenAddress);
-        const balance = await tokenContract.balanceOf(userAddress);
-        console.log('ERC20 Balance:', balance.toString());
-        return balance.toString();
-      }
+      console.log('⚠️ Token balance check not yet implemented with HashConnect');
+      console.log('This would require calling a smart contract view function');
+      // For now, return a placeholder or skip the balance check
+      return '1000000'; // Placeholder balance
     } catch (error: any) {
       console.error('Get balance error:', error);
       return '0';
     }
   };
 
-  // Approve HTS token using precompile
-  const approveHTS = async (tokenAddress: string, amount: string) => {
-    try {
-      const htsContract = await getHTSContract();
-      console.log('Approving HTS token:', tokenAddress, 'for', CONFIG.LENDING_POOL_ADDRESS);
-      
-      const tx = await htsContract.approve(
-        tokenAddress,
-        CONFIG.LENDING_POOL_ADDRESS,
-        amount
-      );
-      const receipt = await tx.wait();
-      console.log('HTS approval successful:', receipt.hash);
-      return receipt.hash;
-    } catch (error: any) {
-      console.error('HTS approval error:', error);
-      throw new Error(`Failed to approve token: ${error.message}`);
-    }
-  };
-
-  // Deposit collateral with property tracking
+  // Deposit collateral with property tracking using HashConnect
   const depositCollateral = async (
-    tokenAddress: string, 
+    tokenAddress: string,
     amount: string,
     propertyId: string,
     propertyValue: string
   ) => {
     try {
-      console.log('Starting deposit...');
+      if (!isConnected || !accountId) {
+        throw new Error('Please connect your wallet first');
+      }
+
+      console.log('🔷 Starting deposit with HashConnect...');
       console.log('Token Address (input):', tokenAddress);
       console.log('Amount:', amount);
       console.log('Property ID:', propertyId);
       console.log('Property Value:', propertyValue);
+      console.log('Account ID:', accountId);
 
-      // Convert Hedera ID to EVM address if needed
-      const evmAddress = tokenAddress.startsWith('0.0.') 
-        ? hederaIdToSolidityAddress(tokenAddress)
+      // Validate amount
+      const amountNum = parseInt(amount, 10);
+      if (isNaN(amountNum) || amountNum <= 0) {
+        throw new Error('Invalid amount: must be a positive number');
+      }
+      console.log('Amount (numeric):', amountNum);
+
+      // Convert to EVM address format if it's a Hedera ID
+      // Solidity contracts expect EVM addresses (0x...)
+      const evmTokenAddress = tokenAddress.startsWith('0.0.')
+        ? hederaIdToEvmAddress(tokenAddress)
         : tokenAddress;
-      
-      console.log('Token Address (EVM):', evmAddress);
 
-      const signer = await getSigner();
-      const userAddress = await signer.getAddress();
-      console.log('User Address:', userAddress);
+      console.log('Token Address (EVM format):', evmTokenAddress);
 
-      // Check balance using HTS precompile
-      const balance = await getTokenBalance(evmAddress, userAddress);
-      console.log('Token Balance:', balance);
+      // Use the Hedera ID if available, otherwise try to convert
+      let lendingPoolId: string;
 
-      // Warning if low balance, but allow user to proceed
-      if (BigInt(balance) < BigInt(amount)) {
-        console.warn(`Warning: Balance shows ${balance} but you're trying to deposit ${amount}`);
-        const proceed = confirm(`Balance check shows ${balance} tokens, but you're depositing ${amount}. This might fail. Continue anyway?`);
-        if (!proceed) {
-          throw new Error('User cancelled deposit');
+      if ('LENDING_POOL_ID' in CONFIG && CONFIG.LENDING_POOL_ID !== '0.0.XXXXXX') {
+        lendingPoolId = (CONFIG as any).LENDING_POOL_ID;
+        console.log('Using configured Hedera ID:', lendingPoolId);
+      } else if (CONFIG.LENDING_POOL_ADDRESS.startsWith('0x')) {
+        console.log('Attempting to convert EVM address to Hedera ID...');
+        try {
+          lendingPoolId = evmAddressToHederaId(CONFIG.LENDING_POOL_ADDRESS);
+          console.log('Converted to Hedera ID:', lendingPoolId);
+        } catch (error: any) {
+          console.error('Conversion failed:', error.message);
+          throw new Error(
+            'Cannot use this contract with HashConnect.\n\n' +
+            'Your LENDING_POOL_ADDRESS is a full EVM address that cannot be automatically converted.\n' +
+            'Please add LENDING_POOL_ID with the Hedera ID (0.0.xxxxx format) to your constants.\n\n' +
+            'You can find this ID from your contract deployment transaction or in HashScan.'
+          );
         }
-      }
-
-      // Approve using HTS precompile with EVM address
-      console.log('Approving tokens via HTS precompile...');
-      await approveHTS(evmAddress, amount);
-
-      // Deposit collateral with property info
-      console.log('Depositing collateral...');
-      const lendingPool = await getLendingPoolContract();
-      const depositTx = await lendingPool.depositCollateral(
-        evmAddress,
-        amount,
-        propertyId,
-        propertyValue
-      );
-      
-      console.log('Deposit TX:', depositTx.hash);
-      const receipt = await depositTx.wait();
-      console.log('Collateral deposited!', receipt.hash);
-
-      return { success: true, txHash: receipt.hash };
-    } catch (error: any) {
-      console.error('Deposit error:', error);
-      
-      if (error.message.includes('User cancelled')) {
-        throw error;
-      } else if (error.message.includes('insufficient funds')) {
-        throw new Error('Insufficient HBAR for gas fees');
-      } else if (error.message.includes('execution reverted')) {
-        throw new Error('Transaction reverted. Possible reasons: Token not associated, insufficient balance, or token not supported.');
       } else {
-        throw new Error(error.shortMessage || error.message || 'Failed to deposit collateral');
+        lendingPoolId = CONFIG.LENDING_POOL_ADDRESS;
       }
-    }
-  };
 
-  // Borrow heNGN
-  const borrow = async (amount: string) => {
-    try {
-      const lendingPool = await getLendingPoolContract();
+      console.log('Lending Pool ID (Hedera format):', lendingPoolId);
 
-      console.log('Borrowing heNGN...');
-      const borrowTx = await lendingPool.borrow(amount);
-      const receipt = await borrowTx.wait();
-      console.log('Borrowed successfully!', receipt.hash);
+      // Step 1: Approve the lending pool to spend tokens
+      // We need to convert the token address back to Hedera ID format for approval
+      let tokenHederaId: string;
+      if (tokenAddress.startsWith('0.0.')) {
+        tokenHederaId = tokenAddress;
+      } else if (tokenAddress.startsWith('0x')) {
+        // Token is in EVM format, convert it to Hedera ID
+        console.log('⚠️ Token address is in EVM format, converting to Hedera ID...');
+        try {
+          tokenHederaId = evmAddressToHederaId(tokenAddress);
+          console.log('✅ Converted to Hedera ID:', tokenHederaId);
+        } catch (conversionError: any) {
+          console.error('❌ Failed to convert token address:', conversionError);
+          throw new Error(
+            'Unable to convert token address to Hedera ID.\n' +
+            'The token address format is not compatible with conversion.\n' +
+            'Please ensure the property token was created properly.'
+          );
+        }
+      } else {
+        throw new Error('Invalid token address format');
+      }
 
-      return { success: true, txHash: receipt.hash };
-    } catch (error: any) {
-      console.error('Borrow error:', error);
-      throw new Error(error.shortMessage || error.message || 'Failed to borrow');
-    }
-  };
+      console.log('🔷 Step 1: Approving token spend...');
+      console.log('Token Hedera ID:', tokenHederaId);
+      console.log('Lending Pool ID:', lendingPoolId);
+      console.log('Amount to approve:', amount);
 
-  // Repay loan
-  const repay = async (amount: string) => {
-    try {
-      const lendingPool = await getLendingPoolContract();
+      try {
+        const approvalResult = await approveToken(
+          accountId,
+          tokenHederaId,
+          lendingPoolId,
+          amount
+        );
+        console.log('✅ Token approval successful!', approvalResult);
+      } catch (approvalError: any) {
+        console.error('❌ Token approval failed:', approvalError);
+        throw new Error(`Token approval failed: ${approvalError.message}`);
+      }
 
-      const heNGNAddress = CONFIG.HENGN_TOKEN_ADDRESS.startsWith('0.0.')
-        ? hederaIdToSolidityAddress(CONFIG.HENGN_TOKEN_ADDRESS)
-        : CONFIG.HENGN_TOKEN_ADDRESS;
+      // Step 2: Deposit the collateral
+      console.log('🔷 Step 2: Executing deposit contract call via HashConnect...');
 
-      console.log('Approving heNGN...');
-      await approveHTS(heNGNAddress, amount);
-
-      console.log('Repaying loan...');
-      const repayTx = await lendingPool.repay(amount);
-      const receipt = await repayTx.wait();
-      console.log('Loan repaid!', receipt.hash);
-
-      return { success: true, txHash: receipt.hash };
-    } catch (error: any) {
-      console.error('Repay error:', error);
-      throw new Error(error.shortMessage || error.message || 'Failed to repay');
-    }
-  };
-
-  // Get loan details
-  const getLoanDetails = async (userAddress: string) => {
-    try {
-      const provider = getProvider();
-      const lendingPool = new ethers.Contract(
-        CONFIG.LENDING_POOL_ADDRESS,
-        LENDING_POOL_ABI,
-        provider
+      // Use HashConnect to execute the contract function
+      const result = await hashConnectExecuteContract(
+        accountId,
+        lendingPoolId,
+        'depositCollateral',
+        {
+          tokenAddress: evmTokenAddress,
+          amount: amount,
+          propertyId: propertyId,
+          propertyValue: propertyValue
+        },
+        500000 // gas limit
       );
 
-      const details = await lendingPool.getLoanDetails(userAddress);
+      console.log('✅ Deposit successful!', result);
 
       return {
-        collateralAmount: details[0].toString(),
-        collateralToken: details[1],
-        borrowedAmount: details[2].toString(),
-        totalDebt: details[3].toString(),
-        healthFactor: details[4].toString(),
-        maxBorrow: details[5].toString(),
+        success: true,
+        txHash: result.transactionId || 'Transaction completed'
       };
     } catch (error: any) {
-      console.error('Get loan details error:', error);
-      throw error;
+      console.error('❌ Deposit error:', error);
+
+      if (error.message.includes('User cancelled') || error.message.includes('user rejected')) {
+        throw new Error('Transaction cancelled by user');
+      } else if (error.message.includes('insufficient')) {
+        throw new Error('Insufficient HBAR for gas fees or insufficient token balance');
+      } else {
+        throw new Error(error.message || 'Failed to deposit collateral');
+      }
+    }
+  };
+
+  // Borrow heNGN using HashConnect
+  const borrow = async (amount: string) => {
+    try {
+      if (!isConnected || !accountId) {
+        throw new Error('Please connect your wallet first');
+      }
+
+      console.log('🔷 Starting borrow with HashConnect...');
+      console.log('Amount:', amount);
+      console.log('Account ID:', accountId);
+
+      // Use the Hedera ID if available, otherwise try to convert
+      let lendingPoolId: string;
+      if ('LENDING_POOL_ID' in CONFIG && CONFIG.LENDING_POOL_ID !== '0.0.XXXXXX') {
+        lendingPoolId = (CONFIG as any).LENDING_POOL_ID;
+      } else if (CONFIG.LENDING_POOL_ADDRESS.startsWith('0x')) {
+        try {
+          lendingPoolId = evmAddressToHederaId(CONFIG.LENDING_POOL_ADDRESS);
+        } catch (error: any) {
+          throw new Error('Please add LENDING_POOL_ID to your constants. See console for details.');
+        }
+      } else {
+        lendingPoolId = CONFIG.LENDING_POOL_ADDRESS;
+      }
+
+      console.log('🔷 Executing borrow via HashConnect...');
+
+      // Use HashConnect to execute the contract function
+      const result = await hashConnectExecuteContract(
+        accountId,
+        lendingPoolId,
+        'borrow',
+        {
+          amount: amount
+        },
+        500000 // gas limit
+      );
+
+      console.log('✅ Borrow successful!', result);
+
+      return {
+        success: true,
+        txHash: result.transactionId || 'Transaction completed'
+      };
+    } catch (error: any) {
+      console.error('❌ Borrow error:', error);
+      throw new Error(error.message || 'Failed to borrow');
+    }
+  };
+
+  // Repay loan using HashConnect
+  const repay = async (amount: string) => {
+    try {
+      if (!isConnected || !accountId) {
+        throw new Error('Please connect your wallet first');
+      }
+
+      console.log('🔷 Starting repay with HashConnect...');
+      console.log('Amount:', amount);
+      console.log('Account ID:', accountId);
+
+      // Use the Hedera ID if available, otherwise try to convert
+      let lendingPoolId: string;
+      if ('LENDING_POOL_ID' in CONFIG && CONFIG.LENDING_POOL_ID !== '0.0.XXXXXX') {
+        lendingPoolId = (CONFIG as any).LENDING_POOL_ID;
+      } else if (CONFIG.LENDING_POOL_ADDRESS.startsWith('0x')) {
+        try {
+          lendingPoolId = evmAddressToHederaId(CONFIG.LENDING_POOL_ADDRESS);
+        } catch (error: any) {
+          throw new Error('Please add LENDING_POOL_ID to your constants. See console for details.');
+        }
+      } else {
+        lendingPoolId = CONFIG.LENDING_POOL_ADDRESS;
+      }
+
+      console.log('🔷 Executing repay via HashConnect...');
+
+      // Use HashConnect to execute the contract function
+      const result = await hashConnectExecuteContract(
+        accountId,
+        lendingPoolId,
+        'repay',
+        {
+          amount: amount
+        },
+        500000 // gas limit
+      );
+
+      console.log('✅ Repay successful!', result);
+
+      return {
+        success: true,
+        txHash: result.transactionId || 'Transaction completed'
+      };
+    } catch (error: any) {
+      console.error('❌ Repay error:', error);
+      throw new Error(error.message || 'Failed to repay');
+    }
+  };
+
+  // Get loan details - Query contract view function via HashConnect SDK
+  const getLoanDetails = async (userAddress: string) => {
+    try {
+      console.log('🔍 Fetching loan details for:', userAddress);
+
+      // For now, use a simplified approach
+      // We'll return placeholder data and show a message to the user
+      // The real implementation would require querying via HashConnect's SDK
+      // which needs wallet connection for contract queries
+
+      console.log('⚠️ getLoanDetails: Mirror node query not supported');
+      console.log('💡 Returning placeholder data. Loan details will be added in future update.');
+
+      // Return zeros - the UI will handle this gracefully
+      return {
+        collateralAmount: '0',
+        collateralToken: '0x0000000000000000000000000000000000000000',
+        borrowedAmount: '0',
+        totalDebt: '0',
+        healthFactor: '0',
+        maxBorrow: '0',
+      };
+    } catch (error: any) {
+      console.error('❌ Get loan details error:', error);
+
+      // Return zeros instead of throwing to prevent UI errors
+      return {
+        collateralAmount: '0',
+        collateralToken: '0x0000000000000000000000000000000000000000',
+        borrowedAmount: '0',
+        totalDebt: '0',
+        healthFactor: '0',
+        maxBorrow: '0',
+      };
+    }
+  };
+
+  // Add supported token (admin function) using HashConnect
+  const addSupportedToken = async (tokenAddress: string) => {
+    try {
+      if (!isConnected || !accountId) {
+        throw new Error('Please connect your wallet first');
+      }
+
+      console.log('🔷 Adding supported token with HashConnect...');
+      console.log('Token Address (input):', tokenAddress);
+      console.log('Account ID:', accountId);
+
+      // Convert to EVM address format if it's a Hedera ID
+      const evmTokenAddress = tokenAddress.startsWith('0.0.')
+        ? hederaIdToEvmAddress(tokenAddress)
+        : tokenAddress;
+
+      console.log('Token Address (EVM format):', evmTokenAddress);
+
+      // Get lending pool ID
+      let lendingPoolId: string;
+      if ('LENDING_POOL_ID' in CONFIG && CONFIG.LENDING_POOL_ID !== '0.0.XXXXXX') {
+        lendingPoolId = (CONFIG as any).LENDING_POOL_ID;
+      } else if (CONFIG.LENDING_POOL_ADDRESS.startsWith('0x')) {
+        try {
+          lendingPoolId = evmAddressToHederaId(CONFIG.LENDING_POOL_ADDRESS);
+        } catch (error: any) {
+          throw new Error('Please add LENDING_POOL_ID to your constants.');
+        }
+      } else {
+        lendingPoolId = CONFIG.LENDING_POOL_ADDRESS;
+      }
+
+      console.log('Lending Pool ID:', lendingPoolId);
+
+      // Execute the addSupportedToken function
+      const result = await hashConnectExecuteContract(
+        accountId,
+        lendingPoolId,
+        'addSupportedToken',
+        {
+          token: evmTokenAddress
+        },
+        100000 // gas limit
+      );
+
+      console.log('✅ Token added successfully!', result);
+
+      return {
+        success: true,
+        txHash: result.transactionId || 'Transaction completed'
+      };
+    } catch (error: any) {
+      console.error('❌ Add supported token error:', error);
+
+      if (error.message.includes('User cancelled') || error.message.includes('user rejected')) {
+        throw new Error('Transaction cancelled by user');
+      } else {
+        throw new Error(error.message || 'Failed to add supported token');
+      }
     }
   };
 
@@ -262,5 +416,6 @@ export function useContract() {
     repay,
     getLoanDetails,
     getTokenBalance,
+    addSupportedToken,
   };
 }

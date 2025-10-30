@@ -1,3 +1,5 @@
+'use client';
+
 import { useEffect } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { RootState } from '../store';
@@ -11,42 +13,29 @@ const useHashConnect = () => {
   useEffect(() => {
     const setupHashConnect = async () => {
       try {
-        // Only run on client side
         if (typeof window === 'undefined') return;
 
-        // Dynamically import HashConnect service
-        const { getHashConnectInstance, getInitPromise, getConnectedAccountIds } = await import('../services/hashConnect');
+        const { getHashConnectInstance, getConnectedAccountIds } = await import('../services/hashConnect');
+        // getHashConnectInstance already waits for initialization to complete
+        const instance = await getHashConnectInstance();
 
-        // Wait for HashConnect to initialize
-        const instance = getHashConnectInstance();
-        await getInitPromise();
-
-        // Set up event listeners
-        instance.pairingEvent.on((pairingData: any) => {
-          console.log("Pairing event:", pairingData);
-          const accountIds = getConnectedAccountIds();
-          if (accountIds && accountIds.length > 0) {
-            dispatch(setConnected({
-              accountId: accountIds[0].toString()
-            }));
+        // Pairing event listener
+        instance.pairingEvent.on(async () => {
+          const accounts = await getConnectedAccountIds();
+          if (accounts?.length > 0) {
+            dispatch(setConnected({ accountId: accounts[0].toString() }));
           }
         });
 
+        // Disconnect listener
         instance.disconnectionEvent.on(() => {
-          console.log("Disconnection event");
           dispatch(setDisconnected());
         });
 
-        instance.connectionStatusChangeEvent.on((connectionStatus: any) => {
-          console.log("Connection status change:", connectionStatus);
-        });
-
         // Check if already connected
-        const accountIds = getConnectedAccountIds();
-        if (accountIds && accountIds.length > 0) {
-          dispatch(setConnected({
-            accountId: accountIds[0].toString()
-          }));
+        const accounts = await getConnectedAccountIds();
+        if (accounts?.length > 0) {
+          dispatch(setConnected({ accountId: accounts[0].toString() }));
         }
 
         console.log("HashConnect setup completed");
@@ -62,15 +51,23 @@ const useHashConnect = () => {
   const connect = async () => {
     dispatch(setLoading(true));
     try {
-      // Only run on client side
       if (typeof window === 'undefined') return;
 
-      // Dynamically import HashConnect service
       const { getHashConnectInstance } = await import('../services/hashConnect');
+      const instance = await getHashConnectInstance(); // Now waits for initialization
 
       console.log("Attempting to connect to wallet...");
-      const instance = getHashConnectInstance();
-      await instance.openPairingModal();
+
+      // ✅ Delay before calling modal
+      setTimeout(async () => {
+        try {
+          await instance.openPairingModal();
+        } catch (modalError) {
+          console.error('Pairing modal failed:', modalError);
+          dispatch(setLoading(false));
+        }
+      }, 500);
+
     } catch (error) {
       console.error('Connection failed:', error);
       dispatch(setLoading(false));
@@ -79,13 +76,11 @@ const useHashConnect = () => {
 
   const disconnect = async () => {
     try {
-      // Only run on client side
       if (typeof window === 'undefined') return;
 
-      // Dynamically import HashConnect service
       const { getHashConnectInstance } = await import('../services/hashConnect');
+      const instance = await getHashConnectInstance(); // Now waits for initialization
 
-      const instance = getHashConnectInstance();
       instance.disconnect();
       dispatch(setDisconnected());
     } catch (error) {
@@ -103,4 +98,4 @@ const useHashConnect = () => {
   };
 };
 
-export default useHashConnect; 
+export default useHashConnect;

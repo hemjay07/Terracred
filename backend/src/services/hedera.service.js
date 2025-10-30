@@ -77,10 +77,9 @@ async mintPropertyTokens(propertyData) {
     await mintTx.getReceipt(this.client);
     console.log(`✅ Tokens minted to treasury`);
 
-    // Grant KYC to user
-    console.log(`Granting KYC to ${ownerAccountId}...`);
-    await this.grantKYC(ownerAccountId, masterTokenId);
-    console.log(`✅ KYC granted`);
+    // NOTE: Master RWA token v2 (0.0.7162666) has NO KYC key
+    // No need to grant KYC - token is freely transferable after association
+    console.log(`⚠️  Skipping KYC grant (token has no KYC key)`);
 
     // Transfer tokens to user
     console.log(`Transferring ${tokenSupply} tokens to ${ownerAccountId}...`);

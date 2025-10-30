@@ -8,19 +8,20 @@ import "../src/PriceOracle.sol";
 contract DeployScript is Script {
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
-        // FIXED: Use HENGN_TOKEN_ADDRESS instead of HENGN_ADDRESS
         address heNGN = vm.envAddress("HENGN_TOKEN_ADDRESS");
+        address masterRWA = vm.envAddress("MASTER_RWA_TOKEN_ADDRESS");
 
         vm.startBroadcast(deployerPrivateKey);
 
-        //deploy oracle
+        // Deploy oracle
         PriceOracle oracle = new PriceOracle();
         console.log("Oracle deployed at:", address(oracle));
 
-        //deploy lending pool with CORRECT heNGN
-        LendingPool pool = new LendingPool(heNGN, address(oracle));
+        // Deploy lending pool with auto-whitelisted master RWA token
+        LendingPool pool = new LendingPool(heNGN, address(oracle), masterRWA);
         console.log("LendingPool deployed at:", address(pool));
         console.log("Using heNGN at:", heNGN);
+        console.log("Master RWA token auto-whitelisted:", masterRWA);
 
         vm.stopBroadcast();
     }

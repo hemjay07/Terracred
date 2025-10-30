@@ -1,5 +1,5 @@
-import { HashConnect } from "hashconnect";
-import { AccountId, LedgerId, ContractExecuteTransaction, ContractFunctionParameters, Hbar } from "@hashgraph/sdk";
+import type { HashConnect } from "hashconnect";
+import { AccountId, LedgerId, ContractExecuteTransaction, ContractFunctionParameters, Hbar, AccountAllowanceApproveTransaction, TokenId } from "@hashgraph/sdk";
 
 const env = "testnet";
 const appMetadata = {
@@ -10,58 +10,88 @@ const appMetadata = {
 };
 
 // Initialize HashConnect only on client side
+let hc: HashConnect | null = null;
+let hcInitPromise: Promise<void> | null = null;
+let hcInstancePromise: Promise<HashConnect> | null = null;
 
-export const hc = new HashConnect(
+const initializeHashConnect = async (): Promise<HashConnect> => {
+    if (typeof window === 'undefined') {
+        throw new Error("HashConnect can only be initialized in browser environment");
+    }
+
+    // Import HashConnect
+    const module = await import('hashconnect');
+    const HashConnectClass = module.HashConnect;
+
+    // Create instance
+    const instance = new HashConnectClass(
         LedgerId.fromString(env),
-        "bfa190dbe93fcf30377b932b31129d05", // projectId
+        "fb29af584e8f72298b6386b0c3724234", // projectId
         appMetadata,
         true
     );
-    
-    console.log(hc)
 
-export const hcInitPromise = hc.init();
+    console.log("HashConnect instance created", instance);
 
+    // Initialize and wait for it to complete
+    await instance.init();
+    console.log("HashConnect initialized successfully");
 
-export const getHashConnectInstance = (): HashConnect => {
-    if (!hc) {
-        throw new Error("HashConnect not initialized. Make sure this is called on the client side.");
-    }
-    return hc;
+    hc = instance;
+    return instance;
 };
 
-export const getConnectedAccountIds = () => {
-    const instance = getHashConnectInstance();
+// Only initialize on client side
+if (typeof window !== 'undefined') {
+    hcInstancePromise = initializeHashConnect();
+}
+
+export { hc, hcInitPromise };
+
+
+export const getHashConnectInstance = async (): Promise<HashConnect> => {
+    if (!hcInstancePromise) {
+        throw new Error("HashConnect not initialized. Make sure this is called on the client side.");
+    }
+
+    // Wait for the instance to be created and initialized
+    return await hcInstancePromise;
+};
+
+export const getConnectedAccountIds = async () => {
+    const instance = await getHashConnectInstance();
     return instance.connectedAccountIds;
 };
 
-export const getInitPromise = (): Promise<void> => {
-    if (!hcInitPromise) {
+export const getInitPromise = async (): Promise<void> => {
+    if (!hcInstancePromise) {
         throw new Error("HashConnect not initialized. Make sure this is called on the client side.");
     }
-    return hcInitPromise;
+    // Wait for the instance to be initialized
+    await hcInstancePromise;
 };
 
 export const signTransaction = async (
     accountIdForSigning: string,
     transaction: any
 ) => {
-    const instance = getHashConnectInstance();
+    const instance = await getHashConnectInstance();
     await getInitPromise();
 
-    const accountIds = getConnectedAccountIds();
+    const accountIds = await getConnectedAccountIds();
     if (!accountIds || accountIds.length === 0) {
         throw new Error("No connected accounts");
     }
 
     const isAccountIdForSigningPaired = accountIds.some(
-        (id) => id.toString() === accountIdForSigning.toString()
+        (id: AccountId) => id.toString() === accountIdForSigning.toString()
     );
     if (!isAccountIdForSigningPaired) {
         throw new Error(`Account ${accountIdForSigning} is not paired`);
     }
 
-    const result = await instance.signTransaction(AccountId.fromString(accountIdForSigning), transaction);
+    const accountIdObj = AccountId.fromString(accountIdForSigning);
+    const result = await instance.signTransaction(accountIdObj, transaction);
     return result;
 };
 
@@ -69,16 +99,16 @@ export const executeTransaction = async (
     accountIdForSigning: string,
     transaction: any
 ) => {
-    const instance = getHashConnectInstance();
+    const instance = await getHashConnectInstance();
     await getInitPromise();
 
-    const accountIds = getConnectedAccountIds();
+    const accountIds = await getConnectedAccountIds();
     if (!accountIds || accountIds.length === 0) {
         throw new Error("No connected accounts");
     }
 
     const isAccountIdForSigningPaired = accountIds.some(
-        (id) => id.toString() === accountIdForSigning.toString()
+        (id: AccountId) => id.toString() === accountIdForSigning.toString()
     );
     if (!isAccountIdForSigningPaired) {
         throw new Error(`Account ${accountIdForSigning} is not paired`);
@@ -92,16 +122,16 @@ export const signMessages = async (
     accountIdForSigning: string,
     message: string
 ) => {
-    const instance = getHashConnectInstance();
+    const instance = await getHashConnectInstance();
     await getInitPromise();
 
-    const accountIds = getConnectedAccountIds();
+    const accountIds = await getConnectedAccountIds();
     if (!accountIds || accountIds.length === 0) {
         throw new Error("No connected accounts");
     }
 
     const isAccountIdForSigningPaired = accountIds.some(
-        (id) => id.toString() === accountIdForSigning.toString()
+        (id: AccountId) => id.toString() === accountIdForSigning.toString()
     );
     if (!isAccountIdForSigningPaired) {
         throw new Error(`Account ${accountIdForSigning} is not paired`);
@@ -118,16 +148,16 @@ export const executeContractFunction = async (
     functionParameters: any,
     gas: number = 500000
 ) => {
-    const instance = getHashConnectInstance();
+    const instance = await getHashConnectInstance();
     await getInitPromise();
 
-    const accountIds = getConnectedAccountIds();
+    const accountIds = await getConnectedAccountIds();
     if (!accountIds || accountIds.length === 0) {
         throw new Error("No connected accounts");
     }
 
     const isAccountIdForSigningPaired = accountIds.some(
-        (id) => id.toString() === accountIdForSigning.toString()
+        (id: AccountId) => id.toString() === accountIdForSigning.toString()
     );
     if (!isAccountIdForSigningPaired) {
         throw new Error(`Account ${accountIdForSigning} is not paired`);
@@ -144,17 +174,18 @@ export const executeContractFunction = async (
 
         // Approach 1: Try to get signer directly (some versions might support this)
         console.log('🔍 DIAGNOSTIC: Checking if getSigner method exists...');
-        console.log('🔍 DIAGNOSTIC: getSigner type:', typeof instance.getSigner);
+        console.log('🔍 DIAGNOSTIC: getSigner type:', typeof (instance as any).getSigner);
 
-        if (typeof instance.getSigner === 'function') {
+        if (typeof (instance as any).getSigner === 'function') {
             try {
                 console.log('🔍 DIAGNOSTIC: Attempting direct getSigner with account:', accountIdForSigning);
-                signer = instance.getSigner(accountIdForSigning);
+                const accountIdObj = AccountId.fromString(accountIdForSigning);
+                signer = (instance as any).getSigner(accountIdObj);
                 console.log('🔍 DIAGNOSTIC: Direct getSigner success, signer:', signer);
                 console.log('🔍 DIAGNOSTIC: Signer type:', typeof signer);
                 console.log('🔍 DIAGNOSTIC: Signer constructor:', signer?.constructor?.name);
                 console.log('🔍 DIAGNOSTIC: Signer methods:', signer ? Object.getOwnPropertyNames(Object.getPrototypeOf(signer)) : 'No signer');
-            } catch (err) {
+            } catch (err: any) {
                 console.error('🚨 DIAGNOSTIC: Direct getSigner failed:', err);
                 console.error('🚨 DIAGNOSTIC: getSigner error type:', err?.constructor?.name);
                 console.error('🚨 DIAGNOSTIC: getSigner error message:', err?.message);
@@ -168,43 +199,17 @@ export const executeContractFunction = async (
             try {
                 console.log('🔍 DIAGNOSTIC: Attempting provider approach...');
 
-                // Try to find topic from various possible locations
-                const possibleTopics = [
-                    instance.hcData?.topic,
-                    instance.topic,
-                    instance.connectionData?.topic,
-                    Object.keys(instance.connectedAccountIds || {})[0]
-                ];
+                // Note: These properties may not exist on HashConnect
+                // This is diagnostic code that may not work with current HashConnect version
+                const possibleTopics: any[] = [];
 
                 console.log('🔍 DIAGNOSTIC: Possible topics:', possibleTopics);
                 const topic = possibleTopics.find(t => t && typeof t === 'string');
                 console.log('🔍 DIAGNOSTIC: Selected topic:', topic);
 
-                if (topic) {
-                    console.log('🔍 DIAGNOSTIC: Checking getProvider method...');
-                    console.log('🔍 DIAGNOSTIC: getProvider type:', typeof instance.getProvider);
-
-                    if (typeof instance.getProvider === 'function') {
-                        console.log('🔍 DIAGNOSTIC: Getting provider with:', { network: "testnet", topic, accountId: accountIdForSigning });
-                        const provider = instance.getProvider("testnet", topic, accountIdForSigning);
-                        console.log('🔍 DIAGNOSTIC: Provider obtained:', provider);
-                        console.log('🔍 DIAGNOSTIC: Provider type:', typeof provider);
-                        console.log('🔍 DIAGNOSTIC: Provider constructor:', provider?.constructor?.name);
-
-                        if (provider && typeof instance.getSigner === 'function') {
-                            console.log('🔍 DIAGNOSTIC: Getting signer from provider...');
-                            signer = instance.getSigner(provider);
-                            console.log('🔍 DIAGNOSTIC: Signer from provider:', signer);
-                        } else {
-                            console.error('🚨 DIAGNOSTIC: Cannot get signer from provider');
-                        }
-                    } else {
-                        console.error('🚨 DIAGNOSTIC: getProvider method not available');
-                    }
-                } else {
-                    console.error('🚨 DIAGNOSTIC: No topic available for provider approach');
-                }
-            } catch (err) {
+                // This section is commented out as it uses non-existent properties
+                console.log('⚠️ DIAGNOSTIC: Provider approach skipped - requires updated HashConnect implementation');
+            } catch (err: any) {
                 console.error('🚨 DIAGNOSTIC: Provider approach failed:', err);
                 console.error('🚨 DIAGNOSTIC: Provider error type:', err?.constructor?.name);
                 console.error('🚨 DIAGNOSTIC: Provider error message:', err?.message);
@@ -240,7 +245,7 @@ export const executeContractFunction = async (
                     .addInt64(functionParameters.maxSupply)
                     .addUint32(functionParameters.autoRenewPeriod);
                 console.log('🔍 DIAGNOSTIC: createNft parameters added successfully');
-            } catch (paramError) {
+            } catch (paramError: any) {
                 console.error('🚨 DIAGNOSTIC: Error adding createNft parameters:', paramError);
                 throw paramError;
             }
@@ -333,7 +338,7 @@ export const executeContractFunction = async (
                         .addUint256Array(mockDates);
 
                     console.log('🎭 MOCK TOKEN: Mock parameters built successfully');
-                } catch (mockError) {
+                } catch (mockError: any) {
                     console.error('🚨 MOCK TOKEN: Error building mock parameters:', mockError);
                     throw new Error(`Mock parameter building failed: ${mockError.message}`);
                 }
@@ -369,14 +374,14 @@ export const executeContractFunction = async (
                     // Metadata is array of strings - convert each to bytes
                     console.log('🔍 DIAGNOSTIC: Converting metadata array to bytes array...');
                     const encoder = new TextEncoder();
-                    metadataBytes = functionParameters.metadata.map(item => encoder.encode(item));
+                    metadataBytes = functionParameters.metadata.map((item: string) => encoder.encode(item));
                     console.log('🔍 DIAGNOSTIC: Metadata array converted, length:', metadataBytes.length);
                     console.log('🔍 DIAGNOSTIC: First item type:', metadataBytes[0]?.constructor?.name);
                 } else {
                     // Fallback: single string
                     console.log('🔍 DIAGNOSTIC: Converting single metadata string to bytes...');
                     const encoder = new TextEncoder();
-                    metadataBytes = [encoder.encode(functionParameters.metadata)];
+                    metadataBytes = [encoder.encode(functionParameters.metadata as string)];
                     console.log('🔍 DIAGNOSTIC: Single metadata converted to array');
                 }
             } catch (textEncoderError) {
@@ -403,7 +408,7 @@ export const executeContractFunction = async (
                         console.log('🔍 DIAGNOSTIC: Manual byte conversion success');
                     } catch (manualError) {
                         console.error('🚨 DIAGNOSTIC: All byte encoding methods failed:', manualError);
-                        throw new Error(`All metadata encoding methods failed: ${manualError.message}`);
+                        throw new Error(`All metadata encoding methods failed: ${(manualError as Error).message}`);
                     }
                 }
             }
@@ -445,7 +450,7 @@ export const executeContractFunction = async (
                 console.log('🔍 DIAGNOSTIC: Uint256 array parameter added successfully');
 
                 console.log('🔍 DIAGNOSTIC: All mintNft parameters added successfully');
-                } catch (paramError) {
+                } catch (paramError: any) {
                     console.error('🚨 DIAGNOSTIC: Error adding mintNft parameters:', paramError);
                     console.error('🚨 DIAGNOSTIC: Parameter error message:', paramError.message);
                     console.error('🚨 DIAGNOSTIC: Parameter error stack:', paramError.stack);
@@ -470,6 +475,64 @@ export const executeContractFunction = async (
                 .addAddress(functionParameters.tokenAddress)
                 .addAddress(functionParameters.newOwnerAddress)
                 .addInt64(functionParameters.serialNumber);
+
+        } else if (functionName === 'depositCollateral') {
+            console.log('🔍 DIAGNOSTIC: Building depositCollateral transaction...');
+
+            // Validate required parameters
+            if (!functionParameters.tokenAddress) {
+                throw new Error('Missing required parameter: tokenAddress');
+            }
+            if (!functionParameters.amount) {
+                throw new Error('Missing required parameter: amount');
+            }
+            if (!functionParameters.propertyId) {
+                throw new Error('Missing required parameter: propertyId');
+            }
+            if (!functionParameters.propertyValue) {
+                throw new Error('Missing required parameter: propertyValue');
+            }
+
+            console.log('🔍 DIAGNOSTIC: Adding depositCollateral parameters...');
+            contractParams
+                .addAddress(functionParameters.tokenAddress)
+                .addUint256(functionParameters.amount)
+                .addString(functionParameters.propertyId)
+                .addUint256(functionParameters.propertyValue);
+            console.log('🔍 DIAGNOSTIC: depositCollateral parameters added successfully');
+
+        } else if (functionName === 'borrow') {
+            console.log('🔍 DIAGNOSTIC: Building borrow transaction...');
+
+            if (!functionParameters.amount) {
+                throw new Error('Missing required parameter: amount');
+            }
+
+            console.log('🔍 DIAGNOSTIC: Adding borrow parameters...');
+            contractParams.addUint256(functionParameters.amount);
+            console.log('🔍 DIAGNOSTIC: borrow parameters added successfully');
+
+        } else if (functionName === 'repay') {
+            console.log('🔍 DIAGNOSTIC: Building repay transaction...');
+
+            if (!functionParameters.amount) {
+                throw new Error('Missing required parameter: amount');
+            }
+
+            console.log('🔍 DIAGNOSTIC: Adding repay parameters...');
+            contractParams.addUint256(functionParameters.amount);
+            console.log('🔍 DIAGNOSTIC: repay parameters added successfully');
+
+        } else if (functionName === 'addSupportedToken') {
+            console.log('🔍 DIAGNOSTIC: Building addSupportedToken transaction...');
+
+            if (!functionParameters.token) {
+                throw new Error('Missing required parameter: token');
+            }
+
+            console.log('🔍 DIAGNOSTIC: Adding addSupportedToken parameters...');
+            contractParams.addAddress(functionParameters.token);
+            console.log('🔍 DIAGNOSTIC: addSupportedToken parameters added successfully');
 
         } else {
             throw new Error(`Unknown function name: ${functionName}`);
@@ -512,7 +575,7 @@ export const executeContractFunction = async (
             console.log('🔍 DIAGNOSTIC: Max transaction fee set');
 
             console.log('🔍 DIAGNOSTIC: Transaction construction completed successfully');
-        } catch (constructionError) {
+        } catch (constructionError: any) {
             console.error('🚨 DIAGNOSTIC: Error during transaction construction:', constructionError);
             console.error('🚨 DIAGNOSTIC: Construction error stack:', constructionError.stack);
             throw new Error(`Transaction construction failed: ${constructionError.message}`);
@@ -552,7 +615,7 @@ export const executeContractFunction = async (
             console.log('🔍 DIAGNOSTIC: Frozen transaction type:', typeof frozenTransaction);
             console.log('🔍 DIAGNOSTIC: Frozen transaction constructor:', frozenTransaction?.constructor?.name);
 
-        } catch (freezeError) {
+        } catch (freezeError: any) {
             console.error('🚨 DIAGNOSTIC: Error during transaction freezing:', freezeError);
             console.error('🚨 DIAGNOSTIC: Freeze error type:', freezeError?.constructor?.name);
             console.error('🚨 DIAGNOSTIC: Freeze error message:', freezeError?.message);
@@ -580,20 +643,20 @@ export const executeContractFunction = async (
             console.log('🔍 DIAGNOSTIC: Response type:', typeof response);
             console.log('🔍 DIAGNOSTIC: Response constructor:', response?.constructor?.name);
 
-        } catch (executionError) {
+        } catch (executionError: any) {
             console.error('🚨 DIAGNOSTIC: Error during transaction execution:', executionError);
             console.error('🚨 DIAGNOSTIC: Execution error type:', executionError?.constructor?.name);
             console.error('🚨 DIAGNOSTIC: Execution error message:', executionError?.message);
             console.error('🚨 DIAGNOSTIC: Execution error stack:', executionError?.stack);
 
             // Check for specific error patterns
-            if (executionError.message.includes('body.data was not set in the protobuf')) {
+            if (executionError.message && executionError.message.includes('body.data was not set in the protobuf')) {
                 console.error('🚨 DIAGNOSTIC: FOUND THE PROTOBUF ERROR!');
                 console.error('🚨 DIAGNOSTIC: This error occurred during executeWithSigner()');
                 console.error('🚨 DIAGNOSTIC: Frozen transaction state:', frozenTransaction);
             }
 
-            if (executionError.message.includes('is not a function')) {
+            if (executionError.message && executionError.message.includes('is not a function')) {
                 console.error('🚨 DIAGNOSTIC: FOUND FUNCTION CALL ERROR!');
                 console.error('🚨 DIAGNOSTIC: This is likely a method invocation issue');
                 console.error('🚨 DIAGNOSTIC: Signer object at time of error:', signer);
@@ -611,11 +674,11 @@ export const executeContractFunction = async (
             console.log('🔍 DIAGNOSTIC: Response methods check...');
             console.log('🔍 DIAGNOSTIC: getReceiptWithSigner method type:', typeof response.getReceiptWithSigner);
 
-            if (typeof response.getReceiptWithSigner !== 'function') {
+            if (typeof (response as any).getReceiptWithSigner !== 'function') {
                 console.log('🔍 DIAGNOSTIC: getReceiptWithSigner not available, trying getReceipt...');
 
-                if (typeof response.getReceipt === 'function') {
-                    receipt = await response.getReceipt();
+                if (typeof (response as any).getReceipt === 'function') {
+                    receipt = await (response as any).getReceipt();
                     console.log('🔍 DIAGNOSTIC: Receipt obtained via getReceipt');
                 } else {
                     console.log('🔍 DIAGNOSTIC: No receipt methods available, skipping receipt');
@@ -624,7 +687,7 @@ export const executeContractFunction = async (
             } else {
                 // Get receipt with signer
                 console.log('🔍 DIAGNOSTIC: Calling getReceiptWithSigner...');
-                receipt = await response.getReceiptWithSigner(signer);
+                receipt = await (response as any).getReceiptWithSigner(signer);
                 console.log('🔍 DIAGNOSTIC: Transaction receipt obtained via getReceiptWithSigner');
             }
 
@@ -632,26 +695,62 @@ export const executeContractFunction = async (
             console.log('🔍 DIAGNOSTIC: Receipt type:', typeof receipt);
             console.log('🔍 DIAGNOSTIC: Receipt constructor:', receipt?.constructor?.name);
 
-        } catch (receiptError) {
+            // Check receipt status if available
+            if (receipt && (receipt as any).status) {
+                const statusString = (receipt as any).status.toString();
+                console.log('🔍 DIAGNOSTIC: Receipt status:', statusString);
+
+                if (statusString.includes('CONTRACT_REVERT_EXECUTED') ||
+                    statusString.includes('FAIL') ||
+                    statusString.includes('REVERT')) {
+                    throw new Error(`Contract execution failed: ${statusString}`);
+                }
+            }
+
+        } catch (receiptError: any) {
             console.error('🚨 DIAGNOSTIC: Error getting receipt:', receiptError);
             console.error('🚨 DIAGNOSTIC: Receipt error type:', receiptError?.constructor?.name);
             console.error('🚨 DIAGNOSTIC: Receipt error message:', receiptError?.message);
             console.error('🚨 DIAGNOSTIC: Receipt error stack:', receiptError?.stack);
 
-            // Check for specific error patterns
-            if (receiptError.message.includes('body.data was not set in the protobuf')) {
-                console.error('🚨 DIAGNOSTIC: FOUND THE PROTOBUF ERROR IN RECEIPT!');
-                console.error('🚨 DIAGNOSTIC: This error occurred during getReceiptWithSigner()');
+            // Check for contract revert errors - these should be thrown, not suppressed
+            if (receiptError.message && (
+                receiptError.message.includes('CONTRACT_REVERT_EXECUTED') ||
+                receiptError.message.includes('StatusError')
+            )) {
+                console.error('🚨 DIAGNOSTIC: CONTRACT REVERT DETECTED! Throwing error...');
+                throw new Error('Contract execution reverted. This usually means:\n' +
+                    '1. Token not approved for the lending pool\n' +
+                    '2. Insufficient token balance\n' +
+                    '3. Token not associated with your account\n' +
+                    '4. Contract validation failed\n\n' +
+                    `Original error: ${receiptError.message}`);
             }
 
-            if (receiptError.message.includes('is not a function')) {
+            // Check for specific error patterns
+            if (receiptError.message && receiptError.message.includes('body.data was not set in the protobuf')) {
+                console.error('🚨 DIAGNOSTIC: FOUND THE PROTOBUF ERROR IN RECEIPT!');
+                console.error('🚨 DIAGNOSTIC: This error occurred during getReceiptWithSigner()');
+                console.error('🚨 DIAGNOSTIC: This often masks a CONTRACT_REVERT error');
+
+                // Try to get more info from the transaction ID
+                const txId = (response as any).transactionId?.toString() || 'unknown';
+                throw new Error('Transaction may have failed. Check the transaction on HashScan: ' +
+                    `https://hashscan.io/testnet/transaction/${txId}\n\n` +
+                    'Common causes:\n' +
+                    '1. Token not approved for spending\n' +
+                    '2. Token not associated with your account\n' +
+                    '3. Insufficient balance\n' +
+                    '4. Contract validation failed');
+            }
+
+            if (receiptError.message && receiptError.message.includes('is not a function')) {
                 console.error('🚨 DIAGNOSTIC: FOUND FUNCTION CALL ERROR IN RECEIPT!');
                 console.error('🚨 DIAGNOSTIC: Response object at time of error:', response);
             }
 
-            // Don't throw error for receipt issues - we can still return the response
-            console.log('🔍 DIAGNOSTIC: Continuing without receipt...');
-            receipt = null;
+            // For other errors, rethrow them - don't suppress
+            throw receiptError;
         }
 
         console.log('🔍 DIAGNOSTIC: Transaction completed successfully!');
@@ -660,19 +759,19 @@ export const executeContractFunction = async (
             success: true,
             response,
             receipt,
-            transactionId: response.transactionId.toString(),
-            contractFunctionResult: receipt?.contractFunctionResult || null
+            transactionId: (response as any).transactionId ? (response as any).transactionId.toString() : 'unknown',
+            contractFunctionResult: (receipt as any)?.contractFunctionResult || null
         };
 
-    } catch (error) {
+    } catch (error: any) {
         console.error('🚨 DIAGNOSTIC: Contract execution completely failed:', error);
         console.error('🚨 DIAGNOSTIC: Error message:', error.message);
         console.error('🚨 DIAGNOSTIC: Error stack:', error.stack);
 
         // If signer pattern failed, try the direct sendTransaction approach
-        if (error.message.includes('body.data was not set in the protobuf') ||
+        if (error.message && (error.message.includes('body.data was not set in the protobuf') ||
             error.message.includes('Transaction execution failed') ||
-            error.message.includes('Transaction freezing failed')) {
+            error.message.includes('Transaction freezing failed'))) {
 
             console.log('🔄 DIAGNOSTIC: Signer pattern failed, trying direct sendTransaction approach...');
             return await executeContractFunctionDirect(accountIdForSigning, contractId, functionName, functionParameters, gas);
@@ -684,67 +783,20 @@ export const executeContractFunction = async (
 
 // Alternative direct sendTransaction approach
 export const executeContractFunctionDirect = async (
-    accountIdForSigning: string,
-    contractId: string,
-    functionName: string,
-    functionParameters: any,
-    gas: number = 500000
+    _accountIdForSigning: string,
+    _contractId: string,
+    _functionName: string,
+    _functionParameters: any,
+    _gas: number = 500000
 ) => {
     console.log('🔄 DIAGNOSTIC: Starting direct sendTransaction approach...');
+    console.log('⚠️ DIAGNOSTIC: This fallback is not fully implemented');
 
-    const instance = getHashConnectInstance();
-    await getInitPromise();
+    // Note: sendTransaction expects a proper Transaction object from @hashgraph/sdk
+    // Not a plain object. This would require reconstructing the transaction.
+    // For now, we'll just throw an error indicating this approach is not implemented.
 
-    const accountIds = getConnectedAccountIds();
-    if (!accountIds || accountIds.length === 0) {
-        throw new Error("No connected accounts");
-    }
-
-    const isAccountIdForSigningPaired = accountIds.some(
-        (id) => id.toString() === accountIdForSigning.toString()
-    );
-    if (!isAccountIdForSigningPaired) {
-        throw new Error(`Account ${accountIdForSigning} is not paired`);
-    }
-
-    try {
-        console.log('🔄 DIAGNOSTIC: Building simple transaction object for sendTransaction...');
-
-        // Build simple transaction object for direct HashConnect usage
-        const transaction = {
-            type: "CONTRACT_CALL",
-            contractId: contractId,
-            functionName: functionName,
-            gas: gas,
-            maxTransactionFee: "200000000", // 2 HBAR in tinybars
-            functionParameters: functionParameters
-        };
-
-        console.log('🔄 DIAGNOSTIC: Transaction object built:', JSON.stringify(transaction, null, 2));
-
-        if (typeof instance.sendTransaction === 'function') {
-            console.log('🔄 DIAGNOSTIC: Using instance.sendTransaction...');
-            const result = await instance.sendTransaction(accountIdForSigning, transaction);
-            console.log('🔄 DIAGNOSTIC: Direct sendTransaction completed:', result);
-
-            return {
-                success: true,
-                transactionId: result.transactionId || `direct-${Date.now()}`,
-                contractFunctionResult: {
-                    getAddress: (index: number) => `0x000000000000000000000000000000000${Math.floor(Math.random() * 1000000).toString(16).padStart(7, '0')}`,
-                    getInt64: (index: number) => Math.floor(Math.random() * 1000) + 1
-                },
-                receipt: result
-            };
-        } else {
-            console.error('🚨 DIAGNOSTIC: sendTransaction method not available');
-            throw new Error('sendTransaction method not available on HashConnect instance');
-        }
-
-    } catch (directError) {
-        console.error('🚨 DIAGNOSTIC: Direct sendTransaction also failed:', directError);
-        throw new Error(`Both signer pattern and direct sendTransaction failed: ${directError.message}`);
-    }
+    throw new Error('Direct sendTransaction fallback not fully implemented. Main signer approach should work.');
 };
 
 // Function to associate token with user account
@@ -754,37 +806,103 @@ export const associateToken = async (accountId: string, tokenAddress: string) =>
         console.log('🔗 DIAGNOSTIC: Account ID:', accountId);
         console.log('🔗 DIAGNOSTIC: Token Address:', tokenAddress);
 
-        // Get the signer from HashPack
-        const signer = hashconnectService.getSigner();
-        if (!signer) {
-            throw new Error('No signer available for token association');
-        }
+        console.log('⚠️ DIAGNOSTIC: Token association not yet implemented');
+        console.log('This would require a different approach with HashConnect');
 
-        // Create token association transaction
-        const { TokenAssociateTransaction } = await import('@hashgraph/sdk');
-
-        const transaction = new TokenAssociateTransaction()
-            .setAccountId(accountId)
-            .setTokenIds([tokenAddress])
-            .freezeWithSigner(signer);
-
-        console.log('🔗 DIAGNOSTIC: Association transaction created');
-
-        const response = await transaction.executeWithSigner(signer);
-        console.log('🔗 DIAGNOSTIC: Association executed:', response);
-
-        // Try to get receipt
-        try {
-            const receipt = await response.getReceiptWithSigner(signer);
-            console.log('🔗 DIAGNOSTIC: Association receipt:', receipt);
-            return { success: true, receipt };
-        } catch (receiptError) {
-            console.log('🔗 DIAGNOSTIC: Receipt failed but transaction may have succeeded:', receiptError);
-            return { success: true, response };
-        }
+        throw new Error('Token association not yet implemented. Please associate tokens manually in HashPack wallet.');
 
     } catch (error) {
         console.error('🔗 DIAGNOSTIC: Token association failed:', error);
         throw error;
+    }
+};
+
+// Approve token spending for a contract (spender)
+export const approveToken = async (
+    accountId: string,
+    tokenId: string,
+    spenderContractId: string,
+    amount: string
+) => {
+    try {
+        console.log('✅ DIAGNOSTIC: Starting token approval...');
+        console.log('✅ DIAGNOSTIC: Account ID:', accountId);
+        console.log('✅ DIAGNOSTIC: Token ID:', tokenId);
+        console.log('✅ DIAGNOSTIC: Spender Contract ID:', spenderContractId);
+        console.log('✅ DIAGNOSTIC: Amount:', amount);
+
+        const instance = await getHashConnectInstance();
+        const signer = instance.getSigner(AccountId.fromString(accountId));
+
+        // Convert Hedera IDs to proper format
+        const ownerAccountId = AccountId.fromString(accountId);
+        const tokenIdObj = TokenId.fromString(tokenId);
+        const spenderAccountId = AccountId.fromString(spenderContractId);
+
+        console.log('✅ DIAGNOSTIC: Creating approval transaction...');
+
+        // Create approval transaction
+        // For NFTs/fungible tokens, we approve the spender (lending pool) to spend tokens
+        // SECURITY: We approve only the exact amount requested
+        // This means users need to approve each deposit, but it's more transparent
+        const approvalAmount = parseInt(amount); // Exact amount requested
+        console.log('✅ DIAGNOSTIC: Using approval amount:', approvalAmount, '(exact amount requested)');
+
+        const approvalTx = new AccountAllowanceApproveTransaction()
+            .approveTokenAllowance(tokenIdObj, ownerAccountId, spenderAccountId, approvalAmount)
+            .setMaxTransactionFee(new Hbar(2));
+
+        console.log('✅ DIAGNOSTIC: Freezing approval transaction...');
+        const frozenTx = await approvalTx.freezeWithSigner(signer);
+
+        console.log('✅ DIAGNOSTIC: Executing approval transaction...');
+        const response = await frozenTx.executeWithSigner(signer);
+
+        console.log('✅ DIAGNOSTIC: Getting approval receipt...');
+        let receipt;
+        try {
+            receipt = await response.getReceiptWithSigner(signer);
+
+            // Check receipt status
+            if (receipt && (receipt as any).status) {
+                const statusString = (receipt as any).status.toString();
+                console.log('✅ DIAGNOSTIC: Approval receipt status:', statusString);
+
+                if (statusString.includes('FAIL') || statusString.includes('REVERT')) {
+                    throw new Error(`Approval transaction failed: ${statusString}`);
+                }
+            }
+        } catch (receiptError: any) {
+            console.warn('⚠️ Could not get approval receipt:', receiptError.message);
+
+            // Wait a bit for the transaction to be processed
+            console.log('⏳ Waiting 5 seconds for approval to process...');
+            await new Promise(resolve => setTimeout(resolve, 5000));
+
+            // Continue anyway - the deposit will fail if approval didn't work
+            console.log('⚠️ Continuing without receipt verification');
+            receipt = null;
+        }
+
+        console.log('✅ DIAGNOSTIC: Approval transaction sent!', {
+            transactionId: response.transactionId?.toString(),
+            status: receipt ? receipt.status.toString() : 'Receipt not available - transaction may still be processing'
+        });
+
+        // Add additional delay to ensure approval is processed before deposit
+        console.log('⏳ Waiting 3 more seconds before proceeding to deposit...');
+        await new Promise(resolve => setTimeout(resolve, 3000));
+
+        return {
+            success: true,
+            transactionId: response.transactionId?.toString(),
+            receipt
+        };
+
+    } catch (error: any) {
+        console.error('❌ DIAGNOSTIC: Token approval failed:', error);
+        console.error('❌ DIAGNOSTIC: Error message:', error.message);
+        console.error('❌ DIAGNOSTIC: Error stack:', error.stack);
+        throw new Error(`Token approval failed: ${error.message}`);
     }
 }; 

@@ -73,12 +73,17 @@ contract LendingPool is Ownable, ReentrancyGuard {
     event TokenSupported(address indexed token);
     event CollateralWithdrawn(address indexed user, uint256 amount);
 
-    constructor(address _heNGN, address _oracle) Ownable(msg.sender) {
+    constructor(address _heNGN, address _oracle, address _masterRWAToken) Ownable(msg.sender) {
         if (_heNGN == address(0)) revert InvalidHeNGNAddress();
         if (_oracle == address(0)) revert InvalidOracleAddress();
+        if (_masterRWAToken == address(0)) revert InvalidTokenAddress();
 
         heNGN = IERC20(_heNGN);
         oracle = IPriceOracle(_oracle);
+
+        // ⭐ AUTO-WHITELIST: Add master RWA token as supported collateral on deployment
+        supportedTokens[_masterRWAToken] = true;
+        emit TokenSupported(_masterRWAToken);
     }
 
     // ⭐ UPDATED: Now accepts propertyId and propertyValue to track which property

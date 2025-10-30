@@ -1,15 +1,15 @@
 'use client';
 
 import { AssociateTokenButton } from '@/components/AssociateTokenButton';
-import { useState, useContext } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { WalletConnectContext } from '@/contexts/WalletConnectContext';
+import useHashConnect from '@/hooks/useHashConnect';
 import { api } from '@/lib/api';
 import Link from 'next/link';
 
 export default function TokenizePage() {
   const router = useRouter();
-  const { isConnected, accountId } = useContext(WalletConnectContext);
+  const { isConnected, accountId } = useHashConnect();
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState({

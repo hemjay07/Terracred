@@ -7,6 +7,7 @@ import { useContract } from '@/hooks/useContract';
 import { api } from '@/lib/api';
 import { CONFIG } from '@/constants';
 import type { Property } from '@/types';
+import { AssociateHeNGNButton } from '@/components/AssociateHeNGNButton';
 
 export default function BorrowPage() {
   const { isConnected, accountId } = useHashConnect();
@@ -256,6 +257,9 @@ export default function BorrowPage() {
         <p className="text-muted-foreground mb-8">
           Lock your property tokens as collateral and borrow Naira stablecoins.
         </p>
+
+        {/* heNGN Association */}
+        <AssociateHeNGNButton />
 
         {/* Steps */}
         <div className="flex items-center justify-between mb-8">

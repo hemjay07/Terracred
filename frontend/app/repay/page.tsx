@@ -262,6 +262,45 @@ export default function RepayPage() {
 
   const hasCollateral = loanDetails && parseFloat(loanDetails.collateralAmount) > 0;
   const hasBorrowed = loanDetails && parseFloat(loanDetails.borrowedAmount) > 0;
+  const totalDebtCents = loanDetails ? parseFloat(loanDetails.totalDebt) : 0;
+  const isDustDebt = totalDebtCents > 0 && totalDebtCents < 100; // Less than ₦1
+  const isFullyRepaid = totalDebtCents === 0 || isDustDebt;
+
+  // If loan is fully repaid (including dust amounts)
+  if (hasCollateral && (totalDebtCents === 0 || isDustDebt)) {
+    return (
+      <div className="container mx-auto px-4 py-20">
+        <div className="max-w-2xl mx-auto text-center">
+          <h1 className="text-4xl font-bold mb-4">Repay Loan</h1>
+
+          <div className="bg-success/10 border border-success/20 rounded-lg p-8 mb-6">
+            <p className="text-6xl mb-4">✅</p>
+            <p className="text-lg font-semibold text-success mb-4">
+              Loan Fully Repaid!
+            </p>
+            <p className="text-muted-foreground mb-2">
+              You have <span className="font-bold text-success">{loanDetails.collateralAmount} tokens</span> locked as collateral.
+            </p>
+            {isDustDebt && (
+              <p className="text-xs text-muted-foreground mb-4">
+                (Remaining dust debt of ₦{(totalDebtCents / 100).toFixed(4)} is negligible and considered paid)
+              </p>
+            )}
+            <p className="text-muted-foreground mb-4">
+              Your loan is paid off! You can now withdraw your collateral to untokenize your property.
+            </p>
+          </div>
+
+          <Link
+            href="/dashboard"
+            className="inline-block bg-primary text-primary-foreground px-6 py-3 rounded-lg hover:opacity-90 transition-opacity"
+          >
+            Go to Dashboard to Withdraw Collateral
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   // If collateral deposited but no borrow yet
   if (hasCollateral && !hasBorrowed) {
@@ -469,12 +508,16 @@ export default function RepayPage() {
               </button>
             </div>
             <p className="text-xs text-muted-foreground mt-2">
-              Min: ₦0.01 • Max: ₦{Math.min(totalDebtNaira, heNGNBalanceNaira).toFixed(2)}
-              {parseFloat(repayAmount) >= totalDebtNaira && parseFloat(repayAmount) <= totalDebtNaira + 10
-                ? ' • Full repayment with ₦10 buffer to prevent interest accrual during transaction'
-                : parseFloat(repayAmount) === totalDebtNaira
-                  ? ' • Full repayment will unlock your collateral'
-                  : ''}
+              Min: ₦0.01 • Max: ₦{Math.min(totalDebtNaira + 10, heNGNBalanceNaira).toFixed(2)}
+              {heNGNBalanceNaira === 0 && totalDebtNaira > 0
+                ? ' • ⚠️ You need heNGN to repay. Get heNGN first.'
+                : parseFloat(repayAmount) >= totalDebtNaira && parseFloat(repayAmount) <= totalDebtNaira + 10
+                  ? ' • Full repayment with ₦10 buffer to prevent interest accrual during transaction'
+                  : parseFloat(repayAmount) === totalDebtNaira
+                    ? ' • Full repayment will unlock your collateral'
+                    : heNGNBalanceNaira < totalDebtNaira
+                      ? ` • ⚠️ Insufficient balance (need ₦${(totalDebtNaira - heNGNBalanceNaira).toFixed(2)} more)`
+                      : ''}
             </p>
           </div>
 

@@ -2,18 +2,26 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import useHashConnect from '@/hooks/useHashConnect';
 import { api } from '@/lib/api';
 import type { Property } from '@/types';
 
 export default function PropertiesPage() {
+  const { isConnected, accountId } = useHashConnect();
   const [properties, setProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'verified' | 'pending'>('all');
 
   useEffect(() => {
     async function fetchProperties() {
+      if (!isConnected || !accountId) {
+        setLoading(false);
+        return;
+      }
+
       try {
-        const response = await api.getProperties();
+        // ✅ Fetch only user's own properties
+        const response = await api.getProperties(accountId);
         if (response.success) {
           setProperties(response.properties);
         }
@@ -25,7 +33,7 @@ export default function PropertiesPage() {
     }
 
     fetchProperties();
-  }, []);
+  }, [isConnected, accountId]);
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -45,6 +53,27 @@ export default function PropertiesPage() {
     return p.status === filter;
   });
 
+  if (!isConnected) {
+    return (
+      <div className="container mx-auto px-4 py-20">
+        <div className="max-w-2xl mx-auto text-center">
+          <div className="bg-warning/10 border border-warning/20 rounded-lg p-8">
+            <p className="text-warning font-medium mb-4">⚠️ Wallet Not Connected</p>
+            <p className="text-muted-foreground mb-6">
+              Please connect your wallet to view your properties.
+            </p>
+            <Link
+              href="/"
+              className="inline-block px-6 py-3 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90"
+            >
+              Connect Wallet
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="container mx-auto px-4 py-20">
@@ -57,9 +86,9 @@ export default function PropertiesPage() {
     <div className="container mx-auto px-4 py-20">
       {/* Header */}
       <div className="mb-12">
-        <h1 className="text-4xl font-bold mb-4">Properties</h1>
+        <h1 className="text-4xl font-bold mb-4">My Properties</h1>
         <p className="text-muted-foreground">
-          Browse all tokenized properties on TerraCred
+          View and manage your tokenized properties
         </p>
       </div>
 

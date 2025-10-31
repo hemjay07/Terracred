@@ -5,6 +5,9 @@ export const CONFIG = {
   // Hedera Network
   HEDERA_NETWORK: 'testnet',
   HEDERA_RPC_URL: 'https://testnet.hashio.io/api',
+
+  // Admin Account (Deployer)
+  ADMIN_ACCOUNT_ID: '0.0.7095129',
   
   // Smart Contracts (FINAL - With new heNGN ERC20, ₦10M funding ready)
   // NOTE: For HashConnect transactions, you need the Hedera ID format (0.0.xxxxx)

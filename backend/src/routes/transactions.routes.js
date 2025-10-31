@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const dataStore = require('../data/store');
+const dataStore = require('../data/database');
 
 /**
  * Get transactions with optional filtering

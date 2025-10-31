@@ -1,226 +1,400 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import useHashConnect from '@/hooks/useHashConnect';
-import { useContract } from '@/hooks/useContract';
+import { api } from '@/lib/api';
 import { CONFIG } from '@/constants';
+import type { Property } from '@/types';
 
 export default function AdminPage() {
   const { isConnected, accountId } = useHashConnect();
-  const { addSupportedToken } = useContract();
+  const [properties, setProperties] = useState<Property[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<'all' | 'verified' | 'pending' | 'rejected'>('all');
+  const [verifying, setVerifying] = useState<string | null>(null);
 
-  const [tokenAddress, setTokenAddress] = useState('');
-  const [processing, setProcessing] = useState(false);
-  const [result, setResult] = useState<{ success: boolean; message: string } | null>(null);
-  const [ownershipCheck, setOwnershipCheck] = useState<string | null>(null);
+  // Check if user is admin
+  const isAdmin = accountId === CONFIG.ADMIN_ACCOUNT_ID;
 
-  const handleAddSupportedToken = async () => {
-    if (!tokenAddress.trim()) {
-      setResult({ success: false, message: 'Please enter a token address' });
-      return;
-    }
-
-    setProcessing(true);
-    setResult(null);
-
-    try {
-      const tx = await addSupportedToken(tokenAddress);
-      setResult({
-        success: true,
-        message: `Token added successfully!\nTransaction: ${tx.txHash}`
-      });
-      setTokenAddress('');
-    } catch (error: any) {
-      let errorMessage = error.message;
-
-      // Provide helpful context for common errors
-      if (error.message.includes('CONTRACT_REVERT_EXECUTED')) {
-        errorMessage =
-          '❌ Transaction Reverted\n\n' +
-          'Most likely cause: You are not the contract owner.\n\n' +
-          'The contract owner is the account that deployed the LendingPool contract. ' +
-          'Check HashScan to verify the owner address and make sure you are connected with that account.\n\n' +
-          'Other possible causes:\n' +
-          '• Token address is invalid (0x0...0)\n' +
-          '• Token is already whitelisted\n\n' +
-          'Original error: ' + error.message;
+  useEffect(() => {
+    async function fetchAllProperties() {
+      if (!isConnected || !accountId) {
+        setLoading(false);
+        return;
       }
 
-      setResult({
-        success: false,
-        message: errorMessage
+      try {
+        // ✅ Admin fetches ALL properties (no owner filter)
+        const response = await api.getProperties();
+        if (response.success) {
+          setProperties(response.properties);
+        }
+      } catch (error) {
+        console.error('Failed to fetch properties:', error);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchAllProperties();
+  }, [isConnected, accountId]);
+
+  const handleVerifyProperty = async (propertyId: string) => {
+    const confirmed = confirm(
+      `🔍 VERIFY PROPERTY ${propertyId}\n\n` +
+      `This will:\n` +
+      `• Mint RWA tokens to the property owner\n` +
+      `• Mark the property as verified\n` +
+      `• Allow the property to be used as collateral\n\n` +
+      `Are you sure you want to verify this property?`
+    );
+
+    if (!confirmed) return;
+
+    setVerifying(propertyId);
+    try {
+      const response = await fetch(`${CONFIG.API_URL}/properties/${propertyId}/verify`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          verifier: accountId,
+        }),
       });
+
+      const result = await response.json();
+
+      if (result.success) {
+        alert(
+          `✅ Property verified successfully!\n\n` +
+          `Property ID: ${propertyId}\n` +
+          `Token ID: ${result.property.tokenId}\n` +
+          `Status: ${result.property.status}\n\n` +
+          `The owner can now use this property as collateral.`
+        );
+
+        // Refresh properties list
+        const refreshResponse = await api.getProperties();
+        if (refreshResponse.success) {
+          setProperties(refreshResponse.properties);
+        }
+      } else {
+        alert(`❌ Verification failed:\n${result.error}`);
+      }
+    } catch (error: any) {
+      alert(`❌ Verification error:\n${error.message}`);
     } finally {
-      setProcessing(false);
+      setVerifying(null);
     }
   };
 
-  const handleAddMasterToken = async () => {
-    setTokenAddress(CONFIG.MASTER_RWA_TOKEN_ADDRESS);
-    // Automatically trigger the add
-    setTimeout(() => {
-      document.getElementById('add-token-button')?.click();
-    }, 100);
+  const handleRejectProperty = async (propertyId: string) => {
+    const reason = prompt(
+      `❌ REJECT PROPERTY ${propertyId}\n\n` +
+      `Please provide a reason for rejection:`
+    );
+
+    if (!reason) return;
+
+    try {
+      const response = await fetch(`${CONFIG.API_URL}/properties/${propertyId}/reject`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          reason,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.success) {
+        alert(`✅ Property rejected.\n\nReason: ${reason}`);
+
+        // Refresh properties list
+        const refreshResponse = await api.getProperties();
+        if (refreshResponse.success) {
+          setProperties(refreshResponse.properties);
+        }
+      } else {
+        alert(`❌ Rejection failed:\n${result.error}`);
+      }
+    } catch (error: any) {
+      alert(`❌ Error:\n${error.message}`);
+    }
   };
 
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'verified':
+        return <span className="px-2 py-1 bg-success/10 text-success border border-success/20 rounded text-xs font-medium">✓ Verified</span>;
+      case 'pending':
+        return <span className="px-2 py-1 bg-warning/10 text-warning border border-warning/20 rounded text-xs font-medium">⏳ Pending</span>;
+      case 'rejected':
+        return <span className="px-2 py-1 bg-danger/10 text-danger border border-danger/20 rounded text-xs font-medium">✗ Rejected</span>;
+      default:
+        return null;
+    }
+  };
+
+  const filteredProperties = properties.filter(p => {
+    if (filter === 'all') return true;
+    return p.status === filter;
+  });
+
+  // Not connected
   if (!isConnected) {
     return (
-      <div className="max-w-4xl mx-auto px-4 py-8">
-        <div className="bg-white rounded-lg shadow p-8 text-center">
-          <h1 className="text-2xl font-bold mb-4">Admin Panel</h1>
-          <p className="text-gray-600 mb-4">Please connect your wallet to access admin functions</p>
+      <div className="container mx-auto px-4 py-20">
+        <div className="max-w-2xl mx-auto text-center">
+          <div className="bg-warning/10 border border-warning/20 rounded-lg p-8">
+            <p className="text-warning font-medium mb-4">⚠️ Wallet Not Connected</p>
+            <p className="text-muted-foreground mb-6">
+              Please connect your wallet to access the admin panel.
+            </p>
+            <Link
+              href="/"
+              className="inline-block px-6 py-3 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90"
+            >
+              Connect Wallet
+            </Link>
+          </div>
         </div>
       </div>
     );
   }
 
-  return (
-    <div className="max-w-4xl mx-auto px-4 py-8">
-      <div className="bg-white rounded-lg shadow">
-        {/* Header */}
-        <div className="border-b border-gray-200 px-6 py-4">
-          <h1 className="text-2xl font-bold">Lending Pool Admin</h1>
-          <p className="text-sm text-gray-600 mt-1">
-            Connected as: <span className="font-mono">{accountId}</span>
-          </p>
-        </div>
-
-        {/* Contract Info */}
-        <div className="border-b border-gray-200 px-6 py-4 bg-gray-50">
-          <h2 className="font-semibold mb-2">Contract Information</h2>
-          <div className="space-y-1 text-sm">
-            <p>
-              <span className="text-gray-600">Lending Pool ID:</span>{' '}
-              <span className="font-mono">{CONFIG.LENDING_POOL_ID}</span>
+  // Not admin
+  if (!isAdmin) {
+    return (
+      <div className="container mx-auto px-4 py-20">
+        <div className="max-w-2xl mx-auto text-center">
+          <div className="bg-danger/10 border border-danger/20 rounded-lg p-8">
+            <p className="text-danger font-medium mb-4">🚫 Access Denied</p>
+            <p className="text-muted-foreground mb-6">
+              You do not have admin privileges. Only the platform administrator can access this page.
             </p>
-            <p>
-              <span className="text-gray-600">Network:</span> {CONFIG.HEDERA_NETWORK}
-            </p>
-          </div>
-        </div>
-
-        {/* Add Supported Token */}
-        <div className="px-6 py-6">
-          <h2 className="text-lg font-semibold mb-4">Add Supported Token</h2>
-
-          <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-4">
-            <p className="text-sm text-yellow-800 font-semibold mb-2">
-              ⚠️ Owner Only Function
-            </p>
-            <p className="text-sm text-yellow-700 mb-2">
-              Only the contract owner can add supported tokens. The owner is the account that deployed the contract.
-            </p>
-            <div className="bg-white rounded p-3 mt-2">
-              <p className="text-xs text-gray-600 mb-1">Your connected account:</p>
-              <p className="text-xs font-mono text-gray-900">{accountId}</p>
-              <p className="text-xs text-gray-600 mt-2 mb-1">To check the contract owner:</p>
-              <a
-                href={`https://hashscan.io/testnet/contract/${CONFIG.LENDING_POOL_ID}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-blue-600 hover:underline"
-              >
-                View contract on HashScan →
-              </a>
-              <p className="text-xs text-gray-500 mt-1">Look for the "owner" field in the contract state</p>
+            <div className="text-xs text-muted-foreground mb-4">
+              <p>Your account: <span className="font-mono">{accountId}</span></p>
+              <p>Admin account: <span className="font-mono">{CONFIG.ADMIN_ACCOUNT_ID}</span></p>
             </div>
-          </div>
-
-          <div className="space-y-4">
-            {/* Quick Add Master Token */}
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-              <p className="text-sm text-blue-800 font-semibold mb-2">Quick Action</p>
-              <p className="text-sm text-blue-700 mb-3">
-                Add the master RWA token ({CONFIG.MASTER_RWA_TOKEN_ID}):
-              </p>
-              <button
-                onClick={handleAddMasterToken}
-                disabled={processing}
-                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed text-sm"
-              >
-                {processing ? 'Processing...' : 'Add Master RWA Token'}
-              </button>
-            </div>
-
-            {/* Manual Token Input */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Token Address (EVM format or Hedera ID)
-              </label>
-              <input
-                type="text"
-                value={tokenAddress}
-                onChange={(e) => setTokenAddress(e.target.value)}
-                placeholder="0x... or 0.0.xxxxx"
-                className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              />
-              <p className="text-xs text-gray-500 mt-1">
-                Example: {CONFIG.MASTER_RWA_TOKEN_ADDRESS} or {CONFIG.MASTER_RWA_TOKEN_ID}
-              </p>
-            </div>
-
-            <button
-              id="add-token-button"
-              onClick={handleAddSupportedToken}
-              disabled={processing || !tokenAddress.trim()}
-              className="w-full bg-green-600 text-white py-3 rounded-lg hover:bg-green-700 disabled:bg-gray-400 disabled:cursor-not-allowed font-semibold"
+            <Link
+              href="/dashboard"
+              className="inline-block px-6 py-3 bg-primary text-primary-foreground rounded-lg font-medium hover:opacity-90"
             >
-              {processing ? 'Processing Transaction...' : 'Add Supported Token'}
-            </button>
-          </div>
-
-          {/* Result Message */}
-          {result && (
-            <div
-              className={`mt-4 p-4 rounded-lg ${
-                result.success
-                  ? 'bg-green-50 border border-green-200'
-                  : 'bg-red-50 border border-red-200'
-              }`}
-            >
-              <p
-                className={`text-sm whitespace-pre-line ${
-                  result.success ? 'text-green-800' : 'text-red-800'
-                }`}
-              >
-                {result.success ? '✅ ' : '❌ '}
-                {result.message}
-              </p>
-            </div>
-          )}
-        </div>
-
-        {/* Instructions */}
-        <div className="border-t border-gray-200 px-6 py-4 bg-gray-50">
-          <h3 className="font-semibold mb-2">Instructions</h3>
-          <ol className="text-sm text-gray-700 space-y-1 list-decimal list-inside">
-            <li>Connect your wallet with the contract owner account</li>
-            <li>Enter the token address you want to whitelist</li>
-            <li>Click "Add Supported Token" and approve the transaction</li>
-            <li>Wait for confirmation</li>
-          </ol>
-        </div>
-
-        {/* What to do if not owner */}
-        <div className="border-t border-gray-200 px-6 py-4 bg-red-50">
-          <h3 className="font-semibold mb-2 text-red-900">If you get a CONTRACT_REVERT error:</h3>
-          <div className="text-sm text-red-800 space-y-2">
-            <p>This means you're not the contract owner. You have 3 options:</p>
-            <ol className="list-decimal list-inside space-y-1 ml-2">
-              <li>
-                <strong>Connect with the deployer account:</strong> The owner is whoever deployed the contract.
-                Disconnect your current wallet and connect with the deployment account.
-              </li>
-              <li>
-                <strong>Transfer ownership:</strong> Have the current owner call <code className="bg-red-100 px-1 rounded">transferOwnership(newOwner)</code> to transfer to your account.
-              </li>
-              <li>
-                <strong>Redeploy the contract:</strong> Deploy a new contract with the master RWA token pre-whitelisted in the constructor (recommended for production).
-              </li>
-            </ol>
+              Go to Dashboard
+            </Link>
           </div>
         </div>
       </div>
+    );
+  }
+
+  // Loading
+  if (loading) {
+    return (
+      <div className="container mx-auto px-4 py-20">
+        <div className="text-center text-muted-foreground">Loading properties...</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="container mx-auto px-4 py-20">
+      {/* Header */}
+      <div className="mb-8">
+        <h1 className="text-4xl font-bold mb-2">Admin Panel</h1>
+        <p className="text-muted-foreground">
+          Manage and verify property submissions
+        </p>
+        <p className="text-xs text-muted-foreground mt-2">
+          Admin account: <span className="font-mono">{accountId}</span>
+        </p>
+      </div>
+
+      {/* Stats Overview */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <div className="bg-card border border-border rounded-lg p-4">
+          <p className="text-sm text-muted-foreground mb-1">Total Properties</p>
+          <p className="text-2xl font-bold">{properties.length}</p>
+        </div>
+        <div className="bg-warning/10 border border-warning/20 rounded-lg p-4">
+          <p className="text-sm text-warning mb-1">Pending Verification</p>
+          <p className="text-2xl font-bold text-warning">
+            {properties.filter(p => p.status === 'pending').length}
+          </p>
+        </div>
+        <div className="bg-success/10 border border-success/20 rounded-lg p-4">
+          <p className="text-sm text-success mb-1">Verified</p>
+          <p className="text-2xl font-bold text-success">
+            {properties.filter(p => p.status === 'verified').length}
+          </p>
+        </div>
+        <div className="bg-danger/10 border border-danger/20 rounded-lg p-4">
+          <p className="text-sm text-danger mb-1">Rejected</p>
+          <p className="text-2xl font-bold text-danger">
+            {properties.filter(p => p.status === 'rejected').length}
+          </p>
+        </div>
+      </div>
+
+      {/* Filter Tabs */}
+      <div className="flex gap-2 mb-8">
+        <button
+          onClick={() => setFilter('all')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            filter === 'all'
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-card border border-border hover:bg-card/80'
+          }`}
+        >
+          All ({properties.length})
+        </button>
+        <button
+          onClick={() => setFilter('pending')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            filter === 'pending'
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-card border border-border hover:bg-card/80'
+          }`}
+        >
+          Pending ({properties.filter(p => p.status === 'pending').length})
+        </button>
+        <button
+          onClick={() => setFilter('verified')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            filter === 'verified'
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-card border border-border hover:bg-card/80'
+          }`}
+        >
+          Verified ({properties.filter(p => p.status === 'verified').length})
+        </button>
+        <button
+          onClick={() => setFilter('rejected')}
+          className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+            filter === 'rejected'
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-card border border-border hover:bg-card/80'
+          }`}
+        >
+          Rejected ({properties.filter(p => p.status === 'rejected').length})
+        </button>
+      </div>
+
+      {/* Properties List */}
+      {filteredProperties.length === 0 ? (
+        <div className="bg-card border border-border rounded-lg p-12 text-center">
+          <p className="text-muted-foreground">
+            {filter === 'all'
+              ? 'No properties submitted yet.'
+              : `No ${filter} properties found.`}
+          </p>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {filteredProperties.map((property) => (
+            <div
+              key={property.propertyId}
+              className="bg-card border border-border rounded-lg p-6"
+            >
+              <div className="flex items-start justify-between mb-4">
+                <div className="flex-1">
+                  <div className="flex items-center gap-3 mb-2">
+                    <h3 className="text-lg font-semibold">{property.address}</h3>
+                    {getStatusBadge(property.status)}
+                  </div>
+                  <p className="text-xs text-muted-foreground font-mono mb-2">
+                    {property.propertyId}
+                  </p>
+                  {property.description && (
+                    <p className="text-sm text-muted-foreground mb-3">
+                      {property.description}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+                <div>
+                  <p className="text-xs text-muted-foreground">Owner</p>
+                  <p className="text-sm font-mono">{property.owner}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Value</p>
+                  <p className="text-sm font-semibold">₦{(property.value / 1000000).toFixed(1)}M</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Token Supply</p>
+                  <p className="text-sm font-semibold">{property.tokenSupply.toLocaleString()}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Submitted</p>
+                  <p className="text-sm">{new Date(property.createdAt).toLocaleDateString()}</p>
+                </div>
+              </div>
+
+              {property.status === 'verified' && property.tokenId && (
+                <div className="bg-success/10 border border-success/20 rounded-lg p-3 mb-4">
+                  <p className="text-xs text-success font-medium mb-1">✓ Verified</p>
+                  <p className="text-xs text-muted-foreground">
+                    Token ID: <span className="font-mono">{property.tokenId}</span>
+                  </p>
+                  {property.verifiedAt && (
+                    <p className="text-xs text-muted-foreground">
+                      Verified: {new Date(property.verifiedAt).toLocaleString()}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {property.status === 'rejected' && (
+                <div className="bg-danger/10 border border-danger/20 rounded-lg p-3 mb-4">
+                  <p className="text-xs text-danger font-medium mb-1">✗ Rejected</p>
+                  {property.rejectionReason && (
+                    <p className="text-xs text-muted-foreground">
+                      Reason: {property.rejectionReason}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* Actions for pending properties */}
+              {property.status === 'pending' && (
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => handleVerifyProperty(property.propertyId)}
+                    disabled={verifying === property.propertyId}
+                    className="flex-1 px-4 py-2 bg-success text-white rounded-lg font-medium hover:bg-success/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {verifying === property.propertyId ? 'Verifying...' : '✓ Verify Property'}
+                  </button>
+                  <button
+                    onClick={() => handleRejectProperty(property.propertyId)}
+                    disabled={verifying !== null}
+                    className="flex-1 px-4 py-2 bg-danger text-white rounded-lg font-medium hover:bg-danger/90 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    ✗ Reject
+                  </button>
+                </div>
+              )}
+
+              {/* View details link */}
+              <div className="mt-4 pt-4 border-t border-border">
+                <Link
+                  href={`/properties/${property.propertyId}`}
+                  className="text-sm text-primary hover:underline"
+                >
+                  View Full Details →
+                </Link>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

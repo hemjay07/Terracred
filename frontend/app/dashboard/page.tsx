@@ -11,12 +11,13 @@ import type { Property, Loan } from '@/types';
 
 export default function DashboardPage() {
   const { isConnected, accountId } = useHashConnect();
-  const { getLoanDetails } = useContract();
+  const { getLoanDetails, withdrawCollateral } = useContract();
   const [properties, setProperties] = useState<Property[]>([]);
   const [loan, setLoan] = useState<Loan | null>(null);
   const [loading, setLoading] = useState(true);
   const [loanDetails, setLoanDetails] = useState<any>(null);
   const [loadingLoan, setLoadingLoan] = useState(false);
+  const [withdrawing, setWithdrawing] = useState(false);
 
   useEffect(() => {
     async function fetchDashboardData() {
@@ -65,6 +66,71 @@ export default function DashboardPage() {
     fetchDashboardData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected, accountId]);
+
+  // Handle collateral withdrawal
+  const handleWithdrawCollateral = async () => {
+    if (!loanDetails || !accountId) return;
+
+    const collateralAmount = loanDetails.collateralAmount;
+    const propertyId = loanDetails.propertyId;
+
+    const confirmed = confirm(
+      `🔓 WITHDRAW COLLATERAL\n\n` +
+      `You are about to withdraw ${collateralAmount} RWA tokens from the lending pool.\n\n` +
+      `Property ID: ${propertyId}\n` +
+      `Tokens: ${collateralAmount}\n\n` +
+      `⚠️ Important:\n` +
+      `• Tokens will be returned to your wallet\n` +
+      `• Property will be delisted from tokenized properties\n` +
+      `• Our team will contact you to arrange off-chain property transfer\n\n` +
+      `This requires your wallet signature.\n\n` +
+      `Continue?`
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setWithdrawing(true);
+
+      // Call withdraw collateral on smart contract
+      const result = await withdrawCollateral(collateralAmount);
+
+      if (result.success) {
+        alert(
+          `✅ Collateral withdrawn successfully!\n\n` +
+          `Transaction: ${result.txHash}\n\n` +
+          `${collateralAmount} RWA tokens have been returned to your wallet.\n\n` +
+          `📝 Next Steps:\n` +
+          `1. Our team will contact you within 24-48 hours\n` +
+          `2. We'll arrange the property documentation transfer\n` +
+          `3. Property will be delisted from the platform`
+        );
+
+        // Call backend to delist property
+        try {
+          await api.delistProperty(accountId, propertyId);
+        } catch (err) {
+          console.error('Failed to delist property in backend:', err);
+          // Don't fail the whole operation if backend delisting fails
+        }
+
+        // Refresh loan details
+        const updatedDetails = await getLoanDetails(accountId);
+        setLoanDetails(updatedDetails);
+
+        // Refresh properties
+        const propsResponse = await api.getProperties(accountId);
+        if (propsResponse.success) {
+          setProperties(propsResponse.properties);
+        }
+      }
+    } catch (error: any) {
+      console.error('Withdrawal failed:', error);
+      alert(`❌ Withdrawal failed:\n${error.message}`);
+    } finally {
+      setWithdrawing(false);
+    }
+  };
 
   // Not connected
   if (!isConnected) {
@@ -131,22 +197,33 @@ export default function DashboardPage() {
 
         {/* Loan Status */}
         <div className="bg-card border border-border rounded-lg p-6">
-          <p className="text-sm text-muted-foreground mb-2">Active Loan</p>
+          <p className="text-sm text-muted-foreground mb-2">Loan Status</p>
           {loading || loadingLoan ? (
             <>
               <p className="text-2xl font-bold text-muted-foreground">Loading...</p>
             </>
-          ) : loanDetails && parseFloat(loanDetails.borrowedAmount) > 0 ? (
+          ) : loanDetails && parseFloat(loanDetails.collateralAmount) > 0 ? (
             <>
-              <p className="text-3xl font-bold">₦{(parseFloat(loanDetails.borrowedAmount) / 100).toLocaleString()}</p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Borrowed • Health: {loanDetails.healthFactor !== '0' ? `${loanDetails.healthFactor}%` : 'N/A'}
-              </p>
+              {parseFloat(loanDetails.borrowedAmount) > 0 ? (
+                <>
+                  <p className="text-3xl font-bold">₦{(parseFloat(loanDetails.borrowedAmount) / 100).toLocaleString()}</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Borrowed • Health: {loanDetails.healthFactor !== '0' && loanDetails.healthFactor !== '115792089237316195423570985008687907853269984665640564039457584007913129639935' ? `${(parseFloat(loanDetails.healthFactor) / 1).toFixed(0)}%` : '∞'}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-3xl font-bold text-success">₦{(parseFloat(loanDetails.maxBorrow) / 100 / 1000000).toFixed(1)}M</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Available to borrow • {loanDetails.collateralAmount} tokens locked
+                  </p>
+                </>
+              )}
             </>
           ) : (
             <>
               <p className="text-3xl font-bold">₦0</p>
-              <p className="text-xs text-muted-foreground mt-1">No active loan</p>
+              <p className="text-xs text-muted-foreground mt-1">No collateral deposited</p>
             </>
           )}
         </div>
@@ -192,6 +269,51 @@ export default function DashboardPage() {
           </a>
         </div>
       </div>
+
+      {/* Withdraw Collateral Section - Only show if collateral exists and NO active loan */}
+      {!loading && !loadingLoan && loanDetails &&
+       parseFloat(loanDetails.collateralAmount) > 0 &&
+       parseFloat(loanDetails.borrowedAmount) === 0 && (
+        <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-6 mb-8">
+          <h2 className="text-lg font-bold mb-2">🔓 Withdraw Collateral</h2>
+          <p className="text-sm text-muted-foreground mb-4">
+            You have {loanDetails.collateralAmount} RWA tokens locked as collateral with no active loan.
+            You can withdraw your collateral to untokenize your property.
+          </p>
+
+          <div className="p-4 bg-background rounded-lg mb-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Collateral Amount</p>
+                <p className="text-xl font-bold">{loanDetails.collateralAmount} tokens</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Property ID</p>
+                <p className="text-xl font-bold">{loanDetails.propertyId}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-amber-500/10 border border-amber-500/20 rounded-lg p-3 mb-4">
+            <p className="text-sm text-amber-600 dark:text-amber-400">
+              ⚠️ <strong>Note:</strong> Withdrawing collateral will:
+            </p>
+            <ul className="text-sm text-amber-600 dark:text-amber-400 ml-6 mt-2 list-disc">
+              <li>Return all RWA tokens to your wallet</li>
+              <li>Delist the property from tokenized properties</li>
+              <li>Initiate off-chain property transfer process</li>
+            </ul>
+          </div>
+
+          <button
+            onClick={handleWithdrawCollateral}
+            disabled={withdrawing}
+            className="w-full px-6 py-3 bg-green-600 hover:bg-green-700 text-white rounded-lg font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {withdrawing ? 'Processing Withdrawal...' : '🔓 Withdraw Collateral & Untokenize Property'}
+          </button>
+        </div>
+      )}
 
       {/* Future: Detailed Loan Section */}
       {false && !loading && !loadingLoan && loanDetails && parseFloat(loanDetails.borrowedAmount) > 0 && (

@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import "./IHederaTokenService.sol";
 
 error TokenNotSupported(address token);
 error InvalidAmount(uint256 amount);
@@ -32,15 +33,20 @@ interface IPriceOracle {
 }
 
 contract LendingPool is Ownable, ReentrancyGuard {
+    // Hedera Token Service precompile address
+    address constant HTS_PRECOMPILE = address(0x167);
+
     IERC20 public heNGN;
     IPriceOracle public oracle;
 
     uint256 public constant COLLATERAL_RATIO = 150; // 150%
     uint256 public constant LIQUIDATION_THRESHOLD = 120; // 120%
     uint256 public constant LIQUIDATION_BONUS = 105; // 5%
-    uint256 public constant INTEREST_RATE = 5; // 5% APR
+    uint256 public constant INTEREST_RATE = 10; // 10% APR
     uint256 public constant SECONDS_PER_YEAR = 365 days;
     uint256 public constant ORIGINATION_FEE = 10; // 0.1% in BPS
+    uint256 public constant LOAN_TERM = 365 days; // 12 months
+    uint256 public constant EXTENSION_TERM = 90 days; // 3 months
 
     struct Loan {
         uint256 collateralAmount;
@@ -49,8 +55,10 @@ contract LendingPool is Ownable, ReentrancyGuard {
         uint256 timestamp;
         uint256 accruedInterest;
         uint256 lastInterestUpdate;
-        string propertyId;           // ⭐ NEW: Track which property backs this loan
-        uint256 propertyValue;       // ⭐ NEW: Property value at time of deposit
+        string propertyId;           // Track which property backs this loan
+        uint256 propertyValue;       // Property value at time of deposit
+        uint256 dueDate;             // When loan must be repaid
+        bool extensionUsed;          // Whether borrower used their one-time extension
     }
 
     mapping(address => Loan) public loans;
@@ -60,7 +68,7 @@ contract LendingPool is Ownable, ReentrancyGuard {
         address indexed user,
         address indexed token,
         uint256 amount,
-        string propertyId              // ⭐ NEW: Include property ID in event
+        string propertyId
     );
     event Borrowed(address indexed user, uint256 amount, uint256 fee);
     event Repaid(address indexed user, uint256 principal, uint256 interest);
@@ -68,7 +76,12 @@ contract LendingPool is Ownable, ReentrancyGuard {
         address indexed borrower,
         uint256 debtCovered,
         uint256 collateralSeized,
-        string propertyId              // ⭐ NEW: Which property was liquidated
+        string propertyId
+    );
+    event LoanExtended(
+        address indexed user,
+        uint256 newDueDate,
+        uint256 interestPaid
     );
     event TokenSupported(address indexed token);
     event CollateralWithdrawn(address indexed user, uint256 amount);
@@ -84,6 +97,16 @@ contract LendingPool is Ownable, ReentrancyGuard {
         // ⭐ AUTO-WHITELIST: Add master RWA token as supported collateral on deployment
         supportedTokens[_masterRWAToken] = true;
         emit TokenSupported(_masterRWAToken);
+    }
+
+    /**
+     * @notice Associate this contract with heNGN token (required for Hedera)
+     * @dev Only owner can call this. Must be called before the contract can receive heNGN
+     */
+    function associateWithHeNGN() external onlyOwner {
+        IHederaTokenService hts = IHederaTokenService(HTS_PRECOMPILE);
+        int32 responseCode = hts.associateToken(address(this), address(heNGN));
+        require(responseCode == 22, "Token association failed");
     }
 
     // ⭐ UPDATED: Now accepts propertyId and propertyValue to track which property
@@ -139,6 +162,11 @@ contract LendingPool is Ownable, ReentrancyGuard {
         if (amount > maxBorrow)
             revert InsufficientCollateral(amount, maxBorrow);
 
+        // Set due date on first borrow
+        if (loan.borrowedAmount == 0 && loan.dueDate == 0) {
+            loan.dueDate = block.timestamp + LOAN_TERM; // 12 months from now
+        }
+
         //calculate origination fee
         uint256 fee = (amount * ORIGINATION_FEE) / 10000;
         uint256 netAmount = amount - fee;
@@ -182,6 +210,43 @@ contract LendingPool is Ownable, ReentrancyGuard {
             revert TransferFailed();
 
         emit Repaid(msg.sender, principalPaid, interestPaid);
+    }
+
+    /**
+     * @notice Extend loan term by 3 months (one-time only)
+     * @dev Borrower must pay all accrued interest to qualify for extension
+     */
+    function extendLoan() external nonReentrant {
+        Loan storage loan = loans[msg.sender];
+
+        // Validate loan exists and has borrowed amount
+        if (loan.borrowedAmount == 0) revert NoActiveLoan(msg.sender);
+
+        // Check extension hasn't been used
+        require(!loan.extensionUsed, "Extension already used");
+
+        // Check we're within extension window (last 30 days before due date)
+        require(block.timestamp >= loan.dueDate - 30 days, "Too early for extension");
+        require(block.timestamp <= loan.dueDate, "Loan already overdue");
+
+        // Update and calculate current interest
+        updateInterest(msg.sender);
+        uint256 interestOwed = loan.accruedInterest;
+
+        // Require payment of all accrued interest
+        require(interestOwed > 0, "No interest to pay");
+
+        // Transfer interest payment
+        if (!heNGN.transferFrom(msg.sender, address(this), interestOwed))
+            revert TransferFailed();
+
+        // Clear accrued interest and extend due date
+        loan.accruedInterest = 0;
+        loan.dueDate = loan.dueDate + EXTENSION_TERM; // Add 3 months
+        loan.extensionUsed = true;
+        loan.lastInterestUpdate = block.timestamp; // Reset interest calculation
+
+        emit LoanExtended(msg.sender, loan.dueDate, interestOwed);
     }
 
     function withdrawCollateral(uint256 amount) external nonReentrant {
@@ -322,6 +387,19 @@ contract LendingPool is Ownable, ReentrancyGuard {
     }
 
     function isLiquidatable(address user) public view returns (bool) {
+        Loan memory loan = loans[user];
+
+        // No loan to liquidate
+        if (loan.borrowedAmount == 0) {
+            return false;
+        }
+
+        // Check if loan is overdue
+        if (loan.dueDate > 0 && block.timestamp > loan.dueDate) {
+            return true; // Overdue loans can always be liquidated
+        }
+
+        // Check health factor
         uint256 healthFactor = getHealthFactor(user);
         if (healthFactor == type(uint256).max) {
             return false;
@@ -369,7 +447,9 @@ contract LendingPool is Ownable, ReentrancyGuard {
             uint256 borrowedAmount,
             uint256 totalDebt,
             uint256 healthFactor,
-            uint256 maxBorrow
+            uint256 maxBorrow,
+            uint256 dueDate,
+            bool extensionUsed
         )
     {
         Loan memory loan = loans[user];
@@ -389,7 +469,9 @@ contract LendingPool is Ownable, ReentrancyGuard {
             borrowedAmount,
             loan.borrowedAmount + loan.accruedInterest + currentInterest,
             getHealthFactor(user),
-            getMaxBorrow(user)
+            getMaxBorrow(user),
+            loan.dueDate,
+            loan.extensionUsed
         );
     }
 

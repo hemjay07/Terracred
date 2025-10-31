@@ -30,6 +30,11 @@ export interface Loan {
   totalDebt: string;
   healthFactor: string;
   maxBorrow: string;
+  timestamp: string;        // Unix timestamp when loan was created
+  accruedInterest: string;  // Interest accumulated so far
+  propertyId: string;       // Which property is used as collateral
+  dueDate: string;          // Unix timestamp when loan is due (NEW)
+  extensionUsed: boolean;   // Whether one-time extension was used (NEW)
 }
 
 // Wallet State

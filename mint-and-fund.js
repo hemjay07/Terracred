@@ -66,8 +66,8 @@ async function main() {
   console.log(`  Current heNGN in treasury: ${currentSupply}`);
 
   // Step 2: Mint heNGN tokens
-  const mintAmount = 10_000_000_00; // 10 million heNGN (2 decimals)
-  console.log(`\n💰 Minting ${mintAmount / 100} heNGN tokens...`);
+  const mintAmount = 410_000_000_00; // 410 million heNGN (2 decimals)
+  console.log(`\n💰 Minting ₦${(mintAmount / 100).toLocaleString()} heNGN tokens...`);
 
   try {
     const mintTx = await new TokenMintTransaction()
@@ -98,8 +98,8 @@ async function main() {
   console.log(`  New heNGN in treasury: ${newSupply}`);
 
   // Step 4: Transfer to lending pool
-  const transferAmount = 5_000_000_00; // 5 million heNGN to the pool
-  console.log(`\n🏦 Transferring ${transferAmount / 100} heNGN to lending pool...`);
+  const transferAmount = 410_000_000_00; // 410 million heNGN to the pool
+  console.log(`\n🏦 Transferring ₦${(transferAmount / 100).toLocaleString()} heNGN to lending pool...`);
 
   try {
     const transferTx = await new TransferTransaction()

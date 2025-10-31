@@ -58,6 +58,14 @@ class APIClient {
     });
   }
 
+  // Delist property (for untokenization)
+  async delistProperty(owner: string, propertyId: string) {
+    return this.request<{ success: boolean; message: string }>(`/properties/${propertyId}/delist`, {
+      method: 'POST',
+      body: JSON.stringify({ owner }),
+    });
+  }
+
   // Get loan details
   async getLoan(userAddress: string) {
     return this.request<{ success: boolean; loan: Loan }>(`/loans/${userAddress}`);

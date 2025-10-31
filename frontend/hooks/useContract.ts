@@ -61,15 +61,63 @@ export function useContract() {
   const { accountId, isConnected } = useHashConnect();
 
 
-  // Get token balance - Note: This is a read-only operation, doesn't need signing
-  const getTokenBalance = async (tokenAddress: string, userAddress: string) => {
+  // Get token balance - Query ERC20 balanceOf function via Hedera JSON-RPC
+  const getTokenBalance = async (userAddress: string, tokenAddress: string) => {
     try {
-      console.log('⚠️ Token balance check not yet implemented with HashConnect');
-      console.log('This would require calling a smart contract view function');
-      // For now, return a placeholder or skip the balance check
-      return '1000000'; // Placeholder balance
+      console.log('🔍 Fetching token balance for:', userAddress);
+      console.log('Token address:', tokenAddress);
+
+      // Get user's EVM address (same logic as getLoanDetails)
+      let userEvmAddress: string;
+      if (userAddress.startsWith('0.0.')) {
+        try {
+          const mirrorResponse = await fetch(`https://testnet.mirrornode.hedera.com/api/v1/accounts/${userAddress}`);
+          const mirrorData = await mirrorResponse.json();
+          userEvmAddress = mirrorData.evm_address || hederaIdToEvmAddress(userAddress);
+        } catch {
+          userEvmAddress = hederaIdToEvmAddress(userAddress);
+        }
+      } else {
+        userEvmAddress = userAddress;
+      }
+
+      // Encode balanceOf(address) function call
+      const functionSelector = '0x70a08231'; // keccak256("balanceOf(address)") first 4 bytes
+      const paddedAddress = userEvmAddress.slice(2).padStart(64, '0');
+      const data = functionSelector + paddedAddress;
+
+      // Call contract via Hedera JSON-RPC
+      const rpcUrl = 'https://testnet.hashio.io/api';
+      const response = await fetch(rpcUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'eth_call',
+          params: [{ to: tokenAddress, data: data }, 'latest'],
+          id: 1,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (result.error) {
+        console.error('RPC Error:', result.error);
+        return '0';
+      }
+
+      if (!result.result || result.result === '0x') {
+        return '0';
+      }
+
+      // Decode uint256 balance
+      const balance = BigInt(result.result).toString();
+      console.log('✅ Token balance (kobo):', balance);
+      console.log('✅ Token balance (Naira):', (parseFloat(balance) / 100).toFixed(2));
+      return balance;
     } catch (error: any) {
-      console.error('Get balance error:', error);
+      console.error('❌ Get balance error:', error);
+      console.error('Error details:', error.message);
       return '0';
     }
   };
@@ -111,8 +159,8 @@ export function useContract() {
       // Use the Hedera ID if available, otherwise try to convert
       let lendingPoolId: string;
 
-      if ('LENDING_POOL_ID' in CONFIG && CONFIG.LENDING_POOL_ID !== '0.0.XXXXXX') {
-        lendingPoolId = (CONFIG as any).LENDING_POOL_ID;
+      if ('LENDING_POOL_ID' in CONFIG && CONFIG.LENDING_POOL_ID.startsWith('0.0.')) {
+        lendingPoolId = CONFIG.LENDING_POOL_ID;
         console.log('Using configured Hedera ID:', lendingPoolId);
       } else if (CONFIG.LENDING_POOL_ADDRESS.startsWith('0x')) {
         console.log('Attempting to convert EVM address to Hedera ID...');
@@ -224,7 +272,7 @@ export function useContract() {
 
       // Use the Hedera ID if available, otherwise try to convert
       let lendingPoolId: string;
-      if ('LENDING_POOL_ID' in CONFIG && CONFIG.LENDING_POOL_ID !== '0.0.XXXXXX') {
+      if ('LENDING_POOL_ID' in CONFIG && CONFIG.LENDING_POOL_ID.startsWith('0.0.')) {
         lendingPoolId = (CONFIG as any).LENDING_POOL_ID;
       } else if (CONFIG.LENDING_POOL_ADDRESS.startsWith('0x')) {
         try {
@@ -274,7 +322,7 @@ export function useContract() {
 
       // Use the Hedera ID if available, otherwise try to convert
       let lendingPoolId: string;
-      if ('LENDING_POOL_ID' in CONFIG && CONFIG.LENDING_POOL_ID !== '0.0.XXXXXX') {
+      if ('LENDING_POOL_ID' in CONFIG && CONFIG.LENDING_POOL_ID.startsWith('0.0.')) {
         lendingPoolId = (CONFIG as any).LENDING_POOL_ID;
       } else if (CONFIG.LENDING_POOL_ADDRESS.startsWith('0x')) {
         try {
@@ -286,7 +334,35 @@ export function useContract() {
         lendingPoolId = CONFIG.LENDING_POOL_ADDRESS;
       }
 
-      console.log('🔷 Executing repay via HashConnect...');
+      // Step 1: Approve heNGN token (ERC20 approval)
+      console.log('🔷 Step 1: Approving heNGN spend (ERC20)...');
+      console.log('heNGN Contract Address:', CONFIG.HENGN_TOKEN_ADDRESS);
+      console.log('Lending Pool Address:', CONFIG.LENDING_POOL_ADDRESS);
+      console.log('Amount to approve:', amount);
+
+      try {
+        // Convert lending pool ID to EVM address for ERC20 approval
+        const lendingPoolEvmAddress = CONFIG.LENDING_POOL_ADDRESS;
+
+        // Call approve(address spender, uint256 amount) on heNGN contract
+        const approvalResult = await hashConnectExecuteContract(
+          accountId,
+          CONFIG.HENGN_TOKEN_ID, // Use token ID for contract call
+          'approve',
+          {
+            spender: lendingPoolEvmAddress,
+            amount: amount
+          },
+          100000 // gas limit for approval
+        );
+        console.log('✅ heNGN ERC20 approval successful!', approvalResult);
+      } catch (approvalError: any) {
+        console.error('❌ heNGN ERC20 approval failed:', approvalError);
+        throw new Error(`heNGN approval failed: ${approvalError.message}`);
+      }
+
+      // Step 2: Execute repayment
+      console.log('🔷 Step 2: Executing repay via HashConnect...');
 
       // Use HashConnect to execute the contract function
       const result = await hashConnectExecuteContract(
@@ -308,6 +384,82 @@ export function useContract() {
     } catch (error: any) {
       console.error('❌ Repay error:', error);
       throw new Error(error.message || 'Failed to repay');
+    }
+  };
+
+  // Extend loan using HashConnect (requires paying accrued interest)
+  const extendLoan = async (interestAmount: string) => {
+    try {
+      if (!isConnected || !accountId) {
+        throw new Error('Please connect your wallet first');
+      }
+
+      console.log('🔷 Starting loan extension with HashConnect...');
+      console.log('Account ID:', accountId);
+      console.log('Interest Amount:', interestAmount);
+
+      // Use the Hedera ID if available, otherwise try to convert
+      let lendingPoolId: string;
+      if ('LENDING_POOL_ID' in CONFIG && CONFIG.LENDING_POOL_ID.startsWith('0.0.')) {
+        lendingPoolId = (CONFIG as any).LENDING_POOL_ID;
+      } else if (CONFIG.LENDING_POOL_ADDRESS.startsWith('0x')) {
+        try {
+          lendingPoolId = evmAddressToHederaId(CONFIG.LENDING_POOL_ADDRESS);
+        } catch (error: any) {
+          throw new Error('Please add LENDING_POOL_ID to your constants. See console for details.');
+        }
+      } else {
+        lendingPoolId = CONFIG.LENDING_POOL_ADDRESS;
+      }
+
+      // Step 1: Approve heNGN token for interest payment (ERC20 approval)
+      console.log('🔷 Step 1: Approving heNGN for interest payment (ERC20)...');
+      console.log('heNGN Contract Address:', CONFIG.HENGN_TOKEN_ADDRESS);
+      console.log('Lending Pool Address:', CONFIG.LENDING_POOL_ADDRESS);
+      console.log('Amount to approve:', interestAmount);
+
+      try {
+        // Convert lending pool ID to EVM address for ERC20 approval
+        const lendingPoolEvmAddress = CONFIG.LENDING_POOL_ADDRESS;
+
+        // Call approve(address spender, uint256 amount) on heNGN contract
+        const approvalResult = await hashConnectExecuteContract(
+          accountId,
+          CONFIG.HENGN_TOKEN_ID, // Use token ID for contract call
+          'approve',
+          {
+            spender: lendingPoolEvmAddress,
+            amount: interestAmount
+          },
+          100000 // gas limit for approval
+        );
+        console.log('✅ heNGN ERC20 approval successful!', approvalResult);
+      } catch (approvalError: any) {
+        console.error('❌ heNGN ERC20 approval failed:', approvalError);
+        throw new Error(`heNGN approval failed: ${approvalError.message}`);
+      }
+
+      // Step 2: Execute loan extension
+      console.log('🔷 Step 2: Executing extendLoan via HashConnect...');
+
+      // Use HashConnect to execute the contract function
+      const result = await hashConnectExecuteContract(
+        accountId,
+        lendingPoolId,
+        'extendLoan',
+        {},  // No parameters needed (contract will calculate interest internally)
+        500000 // gas limit
+      );
+
+      console.log('✅ Loan extension successful!', result);
+
+      return {
+        success: true,
+        txHash: result.transactionId || 'Transaction completed'
+      };
+    } catch (error: any) {
+      console.error('❌ Loan extension error:', error);
+      throw new Error(error.message || 'Failed to extend loan');
     }
   };
 
@@ -384,7 +536,7 @@ export function useContract() {
         };
       }
 
-      // Decode the result: (uint256, address, uint256, uint256, uint256, uint256)
+      // Decode the result: (uint256, address, uint256, uint256, uint256, uint256, uint256, bool)
       const resultData = result.result.slice(2);
       const collateralAmount = BigInt('0x' + resultData.slice(0, 64)).toString();
       const collateralToken = '0x' + resultData.slice(64 + 24, 128);
@@ -392,8 +544,48 @@ export function useContract() {
       const totalDebt = BigInt('0x' + resultData.slice(192, 256)).toString();
       const healthFactor = BigInt('0x' + resultData.slice(256, 320)).toString();
       const maxBorrow = BigInt('0x' + resultData.slice(320, 384)).toString();
+      const dueDate = BigInt('0x' + resultData.slice(384, 448)).toString(); // NEW: 7th return value
+      const extensionUsed = BigInt('0x' + resultData.slice(448, 512)) !== BigInt(0); // NEW: 8th return value (bool)
 
-      console.log('✅ Loan details:', { collateralAmount, borrowedAmount, totalDebt, healthFactor, maxBorrow });
+      // Also fetch full loan data including timestamp by querying loans mapping directly
+      let timestamp = '0';
+      let accruedInterest = '0';
+      let propertyId = '';
+
+      try {
+        // Query the public loans mapping: loans(address) returns full Loan struct
+        // Function signature: loans(address) -> (uint256,address,uint256,uint256,uint256,uint256,string,uint256)
+        const loansFunctionSelector = '0xe1ec3c68'; // keccak256("loans(address)") first 4 bytes
+        const loansData = loansFunctionSelector + paddedAddress;
+
+        const loansResponse = await fetch(rpcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'eth_call',
+            params: [{ to: CONFIG.LENDING_POOL_ADDRESS, data: loansData }, 'latest'],
+            id: 2,
+          }),
+        });
+
+        const loansResult = await loansResponse.json();
+
+        if (loansResult.result && loansResult.result !== '0x') {
+          const loansResultData = loansResult.result.slice(2);
+          // Decode: (uint256 collateralAmount, address collateralToken, uint256 borrowedAmount,
+          //          uint256 timestamp, uint256 accruedInterest, uint256 lastInterestUpdate,
+          //          string propertyId, uint256 propertyValue)
+          timestamp = BigInt('0x' + loansResultData.slice(192, 256)).toString(); // 4th field
+          accruedInterest = BigInt('0x' + loansResultData.slice(256, 320)).toString(); // 5th field
+
+          console.log('✅ Extended loan data:', { timestamp, accruedInterest });
+        }
+      } catch (extendedError) {
+        console.warn('⚠️ Could not fetch extended loan data:', extendedError);
+      }
+
+      console.log('✅ Loan details:', { collateralAmount, borrowedAmount, totalDebt, healthFactor, maxBorrow, timestamp, dueDate, extensionUsed });
 
       return {
         collateralAmount,
@@ -402,6 +594,11 @@ export function useContract() {
         totalDebt,
         healthFactor,
         maxBorrow,
+        timestamp,
+        accruedInterest,
+        propertyId,
+        dueDate,
+        extensionUsed,
       };
     } catch (error: any) {
       console.error('❌ Get loan details error:', error);
@@ -412,6 +609,11 @@ export function useContract() {
         totalDebt: '0',
         healthFactor: '0',
         maxBorrow: '0',
+        timestamp: '0',
+        accruedInterest: '0',
+        propertyId: '',
+        dueDate: '0',
+        extensionUsed: false,
       };
     }
   };
@@ -436,7 +638,7 @@ export function useContract() {
 
       // Get lending pool ID
       let lendingPoolId: string;
-      if ('LENDING_POOL_ID' in CONFIG && CONFIG.LENDING_POOL_ID !== '0.0.XXXXXX') {
+      if ('LENDING_POOL_ID' in CONFIG && CONFIG.LENDING_POOL_ID.startsWith('0.0.')) {
         lendingPoolId = (CONFIG as any).LENDING_POOL_ID;
       } else if (CONFIG.LENDING_POOL_ADDRESS.startsWith('0x')) {
         try {
@@ -478,12 +680,62 @@ export function useContract() {
     }
   };
 
+  // Withdraw collateral (when loan is fully repaid)
+  const withdrawCollateral = async (amount: string) => {
+    try {
+      if (!isConnected || !accountId) {
+        throw new Error('Please connect your wallet first');
+      }
+
+      console.log('🔷 Starting collateral withdrawal with HashConnect...');
+      console.log('Account ID:', accountId);
+      console.log('Amount:', amount);
+
+      // Use the Hedera ID if available, otherwise try to convert
+      let lendingPoolId: string;
+      if ('LENDING_POOL_ID' in CONFIG && CONFIG.LENDING_POOL_ID.startsWith('0.0.')) {
+        lendingPoolId = (CONFIG as any).LENDING_POOL_ID;
+      } else if (CONFIG.LENDING_POOL_ADDRESS.startsWith('0x')) {
+        try {
+          lendingPoolId = evmAddressToHederaId(CONFIG.LENDING_POOL_ADDRESS);
+        } catch (error: any) {
+          throw new Error('Please add LENDING_POOL_ID to your constants. See console for details.');
+        }
+      } else {
+        lendingPoolId = CONFIG.LENDING_POOL_ADDRESS;
+      }
+
+      console.log('🔷 Executing withdrawCollateral via HashConnect...');
+
+      // Use HashConnect to execute the contract function
+      const result = await hashConnectExecuteContract(
+        accountId,
+        lendingPoolId,
+        'withdrawCollateral',
+        { amount },
+        500000 // gas limit
+      );
+
+      console.log('✅ Collateral withdrawal successful!', result);
+
+      return {
+        success: true,
+        txHash: result.transactionId || 'Transaction completed'
+      };
+    } catch (error: any) {
+      console.error('❌ Collateral withdrawal error:', error);
+      throw new Error(error.message || 'Failed to withdraw collateral');
+    }
+  };
+
   return {
     depositCollateral,
     borrow,
     repay,
+    extendLoan,
     getLoanDetails,
     getTokenBalance,
     addSupportedToken,
+    withdrawCollateral,
   };
 }

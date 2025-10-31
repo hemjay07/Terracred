@@ -13,13 +13,21 @@ router.post('/', async (req, res) => {
             value,
             description,
             proofDocumentUri,
-            tokenSupply
+            // tokenSupply is no longer accepted from user input (auto-calculated)
         } = req.body;
 
         if (!owner || !address || !value) {
             return res.status(400).json({
                 success: false,
                 error: 'Missing required fields: owner, address, value'
+            });
+        }
+
+        // Validate value is positive
+        if (value <= 0) {
+            return res.status(400).json({
+                success: false,
+                error: 'Property value must be greater than 0'
             });
         }
 
@@ -32,7 +40,7 @@ router.post('/', async (req, res) => {
             appraisalHash: '0x' + Math.random().toString(16).substr(2, 40),
             deedHash: '0x' + Math.random().toString(16).substr(2, 40),
             status: 'pending',
-            tokenSupply: tokenSupply || 1000,
+            tokenSupply: value, // ✅ Auto-calculate: 1 token = ₦1
             createdAt: new Date()
         });
 
@@ -153,10 +161,10 @@ router.post('/:propertyId/verify', async (req, res) => {
 
         console.log(`Property Owner: ${property.owner}`);
         console.log(`Property Value: ₦${property.value.toLocaleString()}`);
-        console.log(`Token Supply: ${property.tokenSupply}`);
+        console.log(`Token Supply: ${property.tokenSupply} (1:1 with value)`);
 
         const hederaService = req.app.locals.services.hedera;
-        
+
         if (!hederaService) {
             throw new Error('Hedera service not available');
         }
@@ -165,15 +173,16 @@ router.post('/:propertyId/verify', async (req, res) => {
 
         const masterTokenId = process.env.MASTER_RWA_TOKEN_ID;
         const masterTokenAddress = process.env.MASTER_RWA_TOKEN_ADDRESS;
-        
+
         if (!masterTokenId || !masterTokenAddress) {
             throw new Error('Master RWA token not configured. Run create-master-rwa-token.js first!');
         }
-        
+
         await hederaService.mintPropertyTokens({
             propertyId: property.propertyId,
             ownerAccountId: property.owner,
-            tokenSupply: property.tokenSupply
+            tokenSupply: property.tokenSupply,
+            propertyValue: property.value  // ✅ Pass for validation
         });
         
         console.log(`✅ Property tokens minted and transferred!`);
@@ -254,6 +263,65 @@ router.post('/:propertyId/reject', async (req, res) => {
 
     } catch (error) {
         console.error('Property rejection error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+/**
+ * Delist property (for untokenization after collateral withdrawal)
+ */
+router.post('/:propertyId/delist', async (req, res) => {
+    try {
+        const { propertyId } = req.params;
+        const { owner } = req.body;
+
+        console.log(`\n========================================`);
+        console.log(`🔓 DELISTING PROPERTY: ${propertyId}`);
+        console.log(`========================================\n`);
+
+        const property = dataStore.getProperty(propertyId);
+
+        if (!property) {
+            return res.status(404).json({ success: false, error: 'Property not found' });
+        }
+
+        // Verify ownership
+        if (property.owner !== owner) {
+            return res.status(403).json({ success: false, error: 'Not authorized to delist this property' });
+        }
+
+        console.log(`Property Owner: ${property.owner}`);
+        console.log(`Property Value: ₦${property.value.toLocaleString()}`);
+        console.log(`Token Supply: ${property.tokenSupply}`);
+
+        // Update property status to delisted
+        const updatedProperty = dataStore.updatePropertyStatus(propertyId, 'delisted', {
+            delistedAt: new Date(),
+            reason: 'Collateral withdrawn - untokenization requested'
+        });
+
+        // Add transaction record
+        dataStore.addTransaction({
+            type: 'PROPERTY_DELISTED',
+            propertyId: updatedProperty.propertyId,
+            userAddress: updatedProperty.owner,
+            data: {
+                tokenId: updatedProperty.tokenId,
+                tokenAddress: updatedProperty.tokenAddress,
+                delistedAt: updatedProperty.delistedAt
+            }
+        });
+
+        console.log(`✅ PROPERTY DELISTED!\n`);
+
+        res.json({
+            success: true,
+            message: 'Property delisted successfully. Our team will contact you for property transfer arrangements.',
+            property: updatedProperty
+        });
+
+    } catch (error) {
+        console.error('❌ Property delisting error:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });

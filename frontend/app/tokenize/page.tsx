@@ -16,7 +16,6 @@ export default function TokenizePage() {
     address: '',
     value: '',
     description: '',
-    tokenSupply: '1000',
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -35,7 +34,7 @@ export default function TokenizePage() {
         address: formData.address,
         value: parseInt(formData.value),
         description: formData.description,
-        tokenSupply: parseInt(formData.tokenSupply),
+        tokenSupply: parseInt(formData.value), // Auto-calculate: 1 token = ₦1
       });
 
       if (response.success) {
@@ -148,22 +147,21 @@ export default function TokenizePage() {
             />
           </div>
 
-          {/* Token Supply */}
-          <div className="mb-6">
-            <label className="block text-sm font-medium mb-2">
-              Token Supply *
-            </label>
-            <input
-              type="number"
-              name="tokenSupply"
-              value={formData.tokenSupply}
-              onChange={handleChange}
-              required
-              placeholder="1000"
-              className="w-full px-4 py-3 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-            />
-            <p className="text-xs text-muted-foreground mt-1">
-              Number of tokens to create (default: 1000)
+          {/* Token Supply - Auto-calculated (Read-only) */}
+          <div className="mb-6 p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+            <p className="text-sm font-medium text-blue-400 mb-2">
+              🪙 Token Supply (Auto-calculated)
+            </p>
+            <div className="flex items-baseline gap-2">
+              <p className="text-3xl font-bold">
+                {formData.value ? parseInt(formData.value).toLocaleString() : '0'}
+              </p>
+              <p className="text-sm text-muted-foreground">tokens</p>
+            </div>
+            <p className="text-xs text-muted-foreground mt-2">
+              💡 <strong>1 token = ₦1</strong> under our new economics model.
+              <br />
+              Your ₦{formData.value ? parseInt(formData.value).toLocaleString() : '0'} property will automatically receive {formData.value ? parseInt(formData.value).toLocaleString() : '0'} tokens.
             </p>
           </div>
 

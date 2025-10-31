@@ -38,15 +38,26 @@ class HederaService {
 
   // Mint tokens for a verified property (uses master token)
 async mintPropertyTokens(propertyData) {
-    const { propertyId, ownerAccountId, tokenSupply } = propertyData;
+    const { propertyId, ownerAccountId, tokenSupply, propertyValue } = propertyData;
 
     const masterTokenId = process.env.MASTER_RWA_TOKEN_ID;
-    
+
     if (!masterTokenId) {
         throw new Error('MASTER_RWA_TOKEN_ID not set in .env');
     }
 
+    // ✅ VALIDATE: 1 token = ₦1 economics
+    if (propertyValue && tokenSupply !== propertyValue) {
+        console.warn(`⚠️  Token supply (${tokenSupply}) doesn't match property value (₦${propertyValue})`);
+        console.warn(`   Under 1:1 economics, these should be equal!`);
+        console.warn(`   Using tokenSupply = propertyValue = ${propertyValue}`);
+        // Override with correct value for safety
+        propertyData.tokenSupply = propertyValue;
+    }
+
     console.log(`Minting ${tokenSupply} TCRED tokens for ${propertyId}...`);
+    console.log(`Property Value: ₦${propertyValue ? propertyValue.toLocaleString() : 'unknown'}`);
+    console.log(`Token Supply: ${tokenSupply} tokens (1:1 economics)`);
     console.log(`Owner: ${ownerAccountId}`);
 
     // Check if user has associated the token

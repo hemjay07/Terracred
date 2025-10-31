@@ -19,10 +19,11 @@ class DataStore {
         this.transactionCounter = 1;
 
         // Initialize with some dummy data
-        this.initializeDummyData();
+        // DISABLED: Dummy data commented out for production use
+        // this.initializeDummyData();
     }
 
-    initializeDummyData() {
+    initializeDummyDataDISABLED() {
         // Dummy Property 1 - Verified
         this.addProperty({
             propertyId: 'PROP001',

@@ -534,6 +534,35 @@ export const executeContractFunction = async (
             contractParams.addAddress(functionParameters.token);
             console.log('🔍 DIAGNOSTIC: addSupportedToken parameters added successfully');
 
+        } else if (functionName === 'approve') {
+            console.log('🔍 DIAGNOSTIC: Building ERC20 approve transaction...');
+
+            if (!functionParameters.spender) {
+                throw new Error('Missing required parameter: spender');
+            }
+            if (!functionParameters.amount) {
+                throw new Error('Missing required parameter: amount');
+            }
+
+            console.log('🔍 DIAGNOSTIC: Adding approve parameters...');
+            console.log('🔍 DIAGNOSTIC: Spender:', functionParameters.spender);
+            console.log('🔍 DIAGNOSTIC: Amount:', functionParameters.amount);
+            contractParams
+                .addAddress(functionParameters.spender)
+                .addUint256(functionParameters.amount);
+            console.log('🔍 DIAGNOSTIC: approve parameters added successfully');
+
+        } else if (functionName === 'withdrawCollateral') {
+            console.log('🔍 DIAGNOSTIC: Building withdrawCollateral transaction...');
+
+            if (!functionParameters.amount) {
+                throw new Error('Missing required parameter: amount');
+            }
+
+            console.log('🔍 DIAGNOSTIC: Adding withdrawCollateral parameters...');
+            contractParams.addUint256(functionParameters.amount);
+            console.log('🔍 DIAGNOSTIC: withdrawCollateral parameters added successfully');
+
         } else {
             throw new Error(`Unknown function name: ${functionName}`);
         }

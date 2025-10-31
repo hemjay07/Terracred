@@ -554,7 +554,7 @@ export function useContract() {
 
       try {
         // Query the public loans mapping: loans(address) returns full Loan struct
-        // Function signature: loans(address) -> (uint256,address,uint256,uint256,uint256,uint256,string,uint256)
+        // Function signature: loans(address) -> (uint256,address,uint256,uint256,uint256,uint256,string,uint256,uint256,bool)
         const loansFunctionSelector = '0xe1ec3c68'; // keccak256("loans(address)") first 4 bytes
         const loansData = loansFunctionSelector + paddedAddress;
 
@@ -575,9 +575,12 @@ export function useContract() {
           const loansResultData = loansResult.result.slice(2);
           // Decode: (uint256 collateralAmount, address collateralToken, uint256 borrowedAmount,
           //          uint256 timestamp, uint256 accruedInterest, uint256 lastInterestUpdate,
-          //          string propertyId, uint256 propertyValue)
+          //          string propertyId, uint256 propertyValue, uint256 dueDate, bool extensionUsed)
           timestamp = BigInt('0x' + loansResultData.slice(192, 256)).toString(); // 4th field
           accruedInterest = BigInt('0x' + loansResultData.slice(256, 320)).toString(); // 5th field
+
+          // TODO: Extract propertyId from struct (complex due to dynamic string encoding)
+          // For now, propertyId is only used for events/logging
 
           console.log('✅ Extended loan data:', { timestamp, accruedInterest });
         }

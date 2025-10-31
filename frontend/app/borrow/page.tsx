@@ -54,12 +54,15 @@ export default function BorrowPage() {
             setStep('borrow'); // Skip to borrow step
           } else {
             // Create a synthetic property object from blockchain data
-            // This handles cases where property exists on blockchain but not in backend
+            // ⭐ Calculate actual value from contract's maxBorrow (in Naira)
+            const maxBorrowNaira = parseFloat(details.maxBorrow);
+            const inferredPropertyValue = maxBorrowNaira > 0 ? maxBorrowNaira * 1.5 : 400000000;
+
             const syntheticProperty: Property = {
               propertyId: details.propertyId || 'BLOCKCHAIN',
               owner: accountId,
               address: 'Property from Blockchain',
-              value: 400000000, // Infer from maxBorrow / 0.6667
+              value: inferredPropertyValue, // ⭐ Infer from contract's maxBorrow
               description: 'Collateral deposited directly on blockchain',
               status: 'verified',
               tokenId: details.collateralToken,
@@ -95,6 +98,8 @@ export default function BorrowPage() {
 
     // ALL-OR-NOTHING MODEL: User must deposit entire property
     const allTokens = selectedProperty.tokenSupply.toString();
+    // ⭐ Property value stays in NAIRA (matches 1 token = ₦1 model)
+    // Only heNGN amounts use kobo (2 decimals), not property values!
     const totalPropertyValue = selectedProperty.value;
 
     // Warn user about the process
@@ -193,25 +198,26 @@ export default function BorrowPage() {
   const handleBorrow = async () => {
     if (!borrowAmount) return;
 
-    // Validate borrow amount
-    const requestedAmount = parseFloat(borrowAmount);
-    const maxBorrow = parseFloat(maxBorrowFromContract);
+    // ⭐ maxBorrowFromContract is in NAIRA (matches property value units)
+    const requestedAmountNaira = parseFloat(borrowAmount);
+    const maxBorrowNaira = parseFloat(maxBorrowFromContract);
 
-    if (requestedAmount > maxBorrow) {
-      alert(`❌ Cannot borrow ₦${borrowAmount}\n\nMaximum you can borrow: ₦${maxBorrow.toLocaleString()}\n\nThis is based on your collateral value and the ${CONFIG.MAX_LTV}% LTV ratio.`);
+    if (requestedAmountNaira > maxBorrowNaira) {
+      alert(`❌ Cannot borrow ₦${borrowAmount}\n\nMaximum you can borrow: ₦${maxBorrowNaira.toLocaleString()}\n\nThis is based on your collateral value and the ${CONFIG.MAX_LTV}% LTV ratio.`);
       return;
     }
 
-    if (requestedAmount <= 0) {
+    if (requestedAmountNaira <= 0) {
       alert('❌ Please enter a valid borrow amount greater than 0');
       return;
     }
 
     setProcessing(true);
     try {
-      // heNGN has 2 decimals - convert Naira to kobo
-      const amountCents = Math.floor(requestedAmount * 100).toString();
-      const result = await borrow(amountCents);
+      // ⭐ Contract expects amount in NAIRA (matching maxBorrow units), NOT kobo!
+      // The contract handles heNGN transfer internally with proper units
+      const amountNaira = Math.floor(requestedAmountNaira).toString();
+      const result = await borrow(amountNaira);
 
       alert(`✅ Borrowed ₦${borrowAmount} heNGN!\n\nTransaction: ${result.txHash}\n\n💡 Check your HashPack wallet for the heNGN tokens.\nIf you don't see them, you may need to associate the heNGN token first.`);
       window.location.href = '/dashboard';
@@ -566,7 +572,19 @@ export default function BorrowPage() {
                 <div>
                   <p className="text-muted-foreground">Property Value</p>
                   <p className="text-lg font-bold text-success">
-                    ₦{(selectedProperty.value / 1000000).toFixed(1)}M
+                    {(() => {
+                      // ⭐ Calculate actual property value from contract's maxBorrow
+                      // maxBorrowFromContract is in NAIRA (not kobo!)
+                      const maxBorrowNaira = parseFloat(maxBorrowFromContract);
+                      if (maxBorrowNaira > 0) {
+                        // maxBorrow = propertyValue * (100/150) = propertyValue * 0.6667
+                        // So: propertyValue = maxBorrow / 0.6667 = maxBorrow * 1.5
+                        const actualPropertyValue = maxBorrowNaira * 1.5;
+                        return `₦${(actualPropertyValue / 1000000).toFixed(1)}M`;
+                      }
+                      // Fallback to database value if no contract data
+                      return `₦${(selectedProperty.value / 1000000).toFixed(1)}M`;
+                    })()}
                   </p>
                 </div>
                 <div>
@@ -586,7 +604,14 @@ export default function BorrowPage() {
                 <div>
                   <p className="text-muted-foreground">Your Equity</p>
                   <p className="text-lg font-bold text-blue-400">
-                    ₦{((selectedProperty.value - parseFloat(loanDetails?.totalDebt || '0') / 100) / 1000000).toFixed(2)}M
+                    {(() => {
+                      // ⭐ Calculate equity using contract-derived property value
+                      // maxBorrowFromContract is in NAIRA
+                      const maxBorrowNaira = parseFloat(maxBorrowFromContract);
+                      const actualPropertyValue = maxBorrowNaira > 0 ? maxBorrowNaira * 1.5 : selectedProperty.value;
+                      const totalDebtNaira = parseFloat(loanDetails?.totalDebt || '0') / 100;
+                      return `₦${((actualPropertyValue - totalDebtNaira) / 1000000).toFixed(2)}M`;
+                    })()}
                   </p>
                 </div>
               </div>
@@ -595,10 +620,16 @@ export default function BorrowPage() {
                 <div className="mt-3 pt-3 border-t border-success/20">
                   <p className="text-xs text-muted-foreground">Available to Borrow</p>
                   <p className="text-xl font-bold text-success">
+                    {/* ⭐ maxBorrow is in Naira, convert to millions */}
                     ₦{(parseFloat(maxBorrowFromContract) / 1000000).toFixed(2)}M
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    (Max 66% LTV of ₦{(selectedProperty.value / 1000000).toFixed(1)}M = ₦{(selectedProperty.value * 0.6667 / 1000000).toFixed(1)}M total)
+                    {(() => {
+                      // ⭐ maxBorrowFromContract is in Naira
+                      const maxBorrowNaira = parseFloat(maxBorrowFromContract);
+                      const actualPropertyValue = maxBorrowNaira * 1.5; // Reverse of 66.67% LTV
+                      return `(Max 66% LTV of ₦${(actualPropertyValue / 1000000).toFixed(1)}M = ₦${(maxBorrowNaira / 1000000).toFixed(1)}M total)`;
+                    })()}
                   </p>
                 </div>
               )}
@@ -660,7 +691,13 @@ export default function BorrowPage() {
                   <li>1️⃣ If health factor drops below <strong>{CONFIG.LIQUIDATION_THRESHOLD}%</strong>, anyone can liquidate</li>
                   <li>2️⃣ Liquidator pays your debt (₦{((parseFloat(loanDetails?.totalDebt || '0') / 100) / 1000000).toFixed(2)}M + interest)</li>
                   <li>3️⃣ Liquidator receives your property tokens</li>
-                  <li>4️⃣ <strong className="text-blue-400">Your equity (₦{((selectedProperty.value - parseFloat(loanDetails?.totalDebt || '0') / 100) / 1000000).toFixed(2)}M) is protected and returned to you</strong></li>
+                  <li>4️⃣ <strong className="text-blue-400">Your equity (₦{(() => {
+                    // ⭐ maxBorrowFromContract is in Naira
+                    const maxBorrowNaira = parseFloat(maxBorrowFromContract);
+                    const actualPropertyValue = maxBorrowNaira > 0 ? maxBorrowNaira * 1.5 : selectedProperty.value;
+                    const totalDebtNaira = parseFloat(loanDetails?.totalDebt || '0') / 100;
+                    return ((actualPropertyValue - totalDebtNaira) / 1000000).toFixed(2);
+                  })()}M) is protected and returned to you</strong></li>
                 </ul>
                 <p className="text-xs text-blue-400 mt-2 font-medium">
                   💡 You don't lose your equity! Only the portion needed to cover the debt is used.
@@ -679,7 +716,10 @@ export default function BorrowPage() {
                   className="flex-1 px-4 py-3 bg-background border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
                 />
                 <button
-                  onClick={() => setBorrowAmount(maxBorrowFromContract)}
+                  onClick={() => {
+                    // ⭐ maxBorrow is in Naira, use directly
+                    setBorrowAmount(maxBorrowFromContract);
+                  }}
                   disabled={!maxBorrowFromContract || parseFloat(maxBorrowFromContract) <= 0}
                   className="px-4 py-3 bg-primary/20 text-primary border border-primary/30 rounded-lg font-medium hover:bg-primary/30 disabled:opacity-50"
                 >

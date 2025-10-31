@@ -118,18 +118,55 @@ export default function TokenizePage() {
             <label className="block text-sm font-medium mb-2">
               Property Value (₦) *
             </label>
-            <input
-              type="number"
-              name="value"
-              value={formData.value}
-              onChange={handleChange}
-              required
-              placeholder="e.g., 50000000"
-              className="w-full px-4 py-3 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-            />
-            <p className="text-xs text-muted-foreground mt-1">
-              Enter the total value of your property in Nigerian Naira
-            </p>
+            <div className="relative">
+              <span className="absolute left-4 top-1/2 -translate-y-1/2 text-muted-foreground font-medium">
+                ₦
+              </span>
+              <input
+                type="number"
+                name="value"
+                value={formData.value}
+                onChange={handleChange}
+                required
+                placeholder="e.g., 50000000 (₦50M)"
+                min="1000000"
+                step="1000000"
+                className="w-full pl-10 pr-4 py-3 bg-background border border-border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+              />
+            </div>
+            <div className="mt-2 space-y-1">
+              <p className="text-xs text-muted-foreground">
+                Enter the total value in Naira. Examples:
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setFormData({...formData, value: '10000000'})}
+                  className="px-2 py-1 text-xs bg-primary/10 text-primary rounded hover:bg-primary/20"
+                >
+                  ₦10M
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFormData({...formData, value: '50000000'})}
+                  className="px-2 py-1 text-xs bg-primary/10 text-primary rounded hover:bg-primary/20"
+                >
+                  ₦50M
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFormData({...formData, value: '100000000'})}
+                  className="px-2 py-1 text-xs bg-primary/10 text-primary rounded hover:bg-primary/20"
+                >
+                  ₦100M
+                </button>
+              </div>
+              {formData.value && (
+                <p className="text-sm font-medium text-primary mt-2">
+                  = ₦{(parseInt(formData.value) / 1000000).toFixed(1)}M ({parseInt(formData.value).toLocaleString()} Naira)
+                </p>
+              )}
+            </div>
           </div>
 
           {/* Description */}
